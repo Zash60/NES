@@ -1,0 +1,35 @@
+name: Build Android APK
+on:
+push:
+branches: [ master ]
+pull_request:
+branches: [ master ]
+jobs:
+build:
+runs-on: ubuntu-latest
+steps:
+
+name: Checkout code
+uses: actions/checkout@v4
+name: Set up JDK
+uses: actions/setup-java@v4
+with:
+distribution: 'temurin'
+java-version: '17'
+name: Setup Android SDK
+uses: android-actions/setup-android@v3
+name: Accept SDK licenses
+run: yes | sdkmanager --licenses
+name: Setup NDK
+uses: nttld/setup-ndk@v1
+with:
+ndk-version: r26d  # Ajuste para a versão usada no seu projeto, ex: r25c se necessário
+name: Build with Gradle
+working-directory: ./android  # Assumindo que o projeto Android está na pasta 'android'
+run: ./gradlew assembleDebug --stacktrace
+name: Upload APK Artifact
+if: success()
+uses: actions/upload-artifact@v4
+with:
+name: nes-emulator-apk
+path: android/app/build/outputs/apk/debug/app-debug.apk  # Ajuste o path se o módulo for diferente de 'app'
