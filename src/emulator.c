@@ -9,6 +9,8 @@
 #include "debugtools.h"
 #include "utils.h"
 
+#include <SDL.h> // Necessário para SDL_GetPrefPath e SDL_free
+
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
@@ -28,10 +30,29 @@ typedef struct {
     uint8_t x, w;
 } PPUSnapshot;
 
+// Função auxiliar para obter o caminho completo do arquivo de save
+static void get_full_save_path(const char* filename, char* buffer, size_t size) {
+    // SDL_GetPrefPath cria e retorna um diretório seguro para salvar dados
+    // No Android: /data/data/com.barracoder.android/files/Barracoder/AndroNES/
+    char* base_path = SDL_GetPrefPath("Barracoder", "AndroNES");
+    if (base_path) {
+        snprintf(buffer, size, "%s%s", base_path, filename);
+        SDL_free(base_path); // Importante liberar a memória alocada pela SDL
+    } else {
+        // Fallback se falhar (provavelmente falhará no fopen também, mas evita crash)
+        snprintf(buffer, size, "%s", filename);
+    }
+}
+
 void save_state(Emulator* emulator, const char* filename) {
-    FILE* f = fopen(filename, "wb");
+    char full_path[1024];
+    get_full_save_path(filename, full_path, sizeof(full_path));
+
+    LOG(INFO, "Saving state to: %s", full_path);
+
+    FILE* f = fopen(full_path, "wb");
     if (!f) {
-        LOG(ERROR, "Failed to save state to %s", filename);
+        LOG(ERROR, "Failed to save state to %s", full_path);
         return;
     }
 
@@ -60,24 +81,29 @@ void save_state(Emulator* emulator, const char* filename) {
     ppu_snap.w = emulator->ppu.w;
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
     
-    // Nota: Mappers complexos (MMC1, MMC3) precisariam de logica extra para salvar
-    // o estado de seus registradores internos e ponteiros de banco.
-    // Esta implementação cobre jogos mais simples (NROM, CNROM, etc).
-
     fclose(f);
-    LOG(INFO, "State saved to %s", filename);
+    LOG(INFO, "State saved successfully");
 }
 
 void load_state(Emulator* emulator, const char* filename) {
-    FILE* f = fopen(filename, "rb");
+    char full_path[1024];
+    get_full_save_path(filename, full_path, sizeof(full_path));
+
+    LOG(INFO, "Loading state from: %s", full_path);
+
+    FILE* f = fopen(full_path, "rb");
     if (!f) {
-        LOG(ERROR, "Failed to load state from %s", filename);
+        LOG(ERROR, "Failed to load state from %s", full_path);
         return;
     }
 
     // 1. Carregar CPU
     CPUSnapshot cpu_snap;
-    if (fread(&cpu_snap, sizeof(CPUSnapshot), 1, f) != 1) { fclose(f); return; }
+    if (fread(&cpu_snap, sizeof(CPUSnapshot), 1, f) != 1) { 
+        LOG(ERROR, "Error reading CPU state");
+        fclose(f); 
+        return; 
+    }
     emulator->cpu.pc = cpu_snap.pc;
     emulator->cpu.ac = cpu_snap.ac;
     emulator->cpu.x = cpu_snap.x;
@@ -86,11 +112,19 @@ void load_state(Emulator* emulator, const char* filename) {
     emulator->cpu.sp = cpu_snap.sp;
 
     // 2. Carregar RAM
-    fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    if (fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f) != RAM_SIZE) {
+        LOG(ERROR, "Error reading RAM");
+        fclose(f);
+        return;
+    }
 
     // 3. Carregar PPU
     PPUSnapshot ppu_snap;
-    if (fread(&ppu_snap, sizeof(PPUSnapshot), 1, f) != 1) { fclose(f); return; }
+    if (fread(&ppu_snap, sizeof(PPUSnapshot), 1, f) != 1) { 
+        LOG(ERROR, "Error reading PPU state");
+        fclose(f); 
+        return; 
+    }
     
     memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, sizeof(ppu_snap.V_RAM));
     memcpy(emulator->ppu.OAM, ppu_snap.OAM, sizeof(ppu_snap.OAM));
@@ -105,7 +139,7 @@ void load_state(Emulator* emulator, const char* filename) {
     emulator->ppu.w = ppu_snap.w;
 
     fclose(f);
-    LOG(INFO, "State loaded from %s", filename);
+    LOG(INFO, "State loaded successfully");
 }
 
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
@@ -297,9 +331,7 @@ void run_emulator(struct Emulator* emulator){
                 frame_count = 0;
             }
 
-            // Renderiza com FPS
             render_graphics(g_ctx, ppu->screen, current_fps);
-
             ppu->render = 0;
             queue_audio(apu, g_ctx);
             mark_end(timer);
