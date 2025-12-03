@@ -3,6 +3,9 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 
+// Variavel global para controle do filtro (0=Normal, 1=Scanlines)
+extern int video_filter_mode;
+
 typedef struct GraphicsContext{
     SDL_Window* window;
     SDL_Renderer* renderer;
@@ -23,5 +26,4 @@ void free_graphics(GraphicsContext* ctx);
 
 void get_graphics_context(GraphicsContext* ctx);
 
-// Atualizado para receber o FPS
 void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps);
