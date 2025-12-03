@@ -1,4 +1,5 @@
 #include "timers.h"
+#include <stdlib.h> // Necessário para calloc e free
 
 #define G 1000000000L
 #define M 1000000L
