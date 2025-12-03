@@ -5,10 +5,15 @@
 
 #include "utils.h"
 #include "touchpad.h"
+#include "emulator.h" // Necessário para save_state/load_state
 
 #ifndef M_PI
 #define M_PI		3.14159265358979323846
 #endif
+
+// IDs internos para os botões de sistema (fora do enum KeyPad)
+#define BTN_ID_SAVE 0x10000
+#define BTN_ID_LOAD 0x20000
 
 static TouchPad touch_pad;
 
@@ -17,7 +22,7 @@ enum{
     BUTTON_LONG
 };
 
-static void init_button(struct TouchButton* button, KeyPad id, size_t index, int type, char* label, int x, int y, TTF_Font* font);
+static void init_button(struct TouchButton* button, uint32_t id, size_t index, int type, char* label, int x, int y, TTF_Font* font);
 static void init_axis(GraphicsContext* ctx, int x, int y);
 static uint8_t is_within_bound(int eventX, int eventY, SDL_FRect* bound);
 static uint8_t is_within_circle(int eventX, int eventY, int centerX, int centerY, int radius);
@@ -25,10 +30,14 @@ static void to_abs_position(double* x, double* y);
 static int angle(int x1, int y1, int x2, int y2);
 static void update_joy_pos();
 
-void init_touch_pad(GraphicsContext* ctx){
+void init_touch_pad(struct Emulator* emulator){
+    GraphicsContext* ctx = &emulator->g_ctx;
     if(ctx->is_tv)
         return;
+    
+    touch_pad.emulator = emulator;
     touch_pad.g_ctx = ctx;
+    
     int font_size = (int)((ctx->screen_height * 0.08));
     touch_pad.font = TTF_OpenFont("asap.ttf", (font_size * 4)/3);
     if(ctx->font == NULL){
@@ -39,15 +48,22 @@ void init_touch_pad(GraphicsContext* ctx){
     int anchor_y = ctx->screen_height - offset;
     int anchor_x = ctx->screen_width - offset;
     int anchor_mid = (int)(ctx->screen_height * 0.3);
+    int top_y = (int)(ctx->screen_height * 0.1); // Posição Y para Save/Load
 
     SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 255);
 
+    // Botões de Jogo
     init_button(&touch_pad.A, BUTTON_A, 0, BUTTON_CIRCLE, "A", anchor_x, anchor_y - offset/2, touch_pad.font);
     init_button(&touch_pad.turboA, TURBO_A, 1, BUTTON_CIRCLE, "X",  anchor_x, anchor_y + offset/2, touch_pad.font);
     init_button(&touch_pad.B, BUTTON_B, 2, BUTTON_CIRCLE, "B",  anchor_x - offset/2, anchor_y, touch_pad.font);
     init_button(&touch_pad.turboB, TURBO_B, 3, BUTTON_CIRCLE, "Y",  anchor_x + offset/2, anchor_y, touch_pad.font);
     init_button(&touch_pad.select, SELECT, 4, BUTTON_LONG,"Select",  offset, anchor_mid, ctx->font);
     init_button(&touch_pad.start, START, 5, BUTTON_LONG," Start ",  anchor_x, anchor_mid, ctx->font);
+
+    // Botões de Sistema (Save/Load)
+    // Load no canto superior esquerdo, Save no canto superior direito (ou adjacentes)
+    init_button(&touch_pad.load, BTN_ID_LOAD, 6, BUTTON_LONG, "Load", offset, top_y, ctx->font);
+    init_button(&touch_pad.save, BTN_ID_SAVE, 7, BUTTON_LONG, "Save", ctx->screen_width - offset, top_y, ctx->font);
 
     init_axis(ctx, offset, anchor_y);
 
@@ -57,7 +73,7 @@ void init_touch_pad(GraphicsContext* ctx){
 }
 
 
-static void init_button(struct TouchButton* button, KeyPad id, size_t index, int type, char* label, int x, int y, TTF_Font* font){
+static void init_button(struct TouchButton* button, uint32_t id, size_t index, int type, char* label, int x, int y, TTF_Font* font){
     GraphicsContext* ctx = touch_pad.g_ctx;
     touch_pad.buttons[index] = button;
     SDL_Color color = {0xF9, 0x58, 0x1A};
@@ -165,7 +181,9 @@ void render_touch_controls(GraphicsContext* ctx){
 
     for(int i = 0; i < TOUCH_BUTTON_COUNT; i++){
         TouchButton* button = touch_pad.buttons[i];
-        SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
+        if (button) {
+            SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
+        }
     }
 }
 
@@ -186,20 +204,18 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
             to_abs_position(&x, &y);
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *button = touch_pad.buttons[i];
-                if (button->active && button->finger == event->tfinger.fingerID) {
+                if (button && button->active && button->finger == event->tfinger.fingerID) {
                     button->active = 0;
                     button->finger = -1;
-                    // type as button release
-                    key &= ~button->id;
+                    
+                    // Botões normais são liberados
+                    if (button->id < BTN_ID_SAVE) {
+                         key &= ~button->id;
+                         if(button->id == TURBO_A) key &= ~BUTTON_A;
+                         if(button->id == TURBO_B) key &= ~BUTTON_B;
+                    }
+                    
                     LOG(DEBUG, "Released button finger id: %d", event->tfinger.fingerID);
-                    if(button->id == TURBO_A) {
-                        // clear button A
-                        key &= ~BUTTON_A;
-                    }
-                    if(button->id == TURBO_B) {
-                        // clear button B
-                        key &= ~BUTTON_B;
-                    }
                 }
             }
 
@@ -225,10 +241,13 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
             int was_button_pressed = 0;
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *button = touch_pad.buttons[i];
+                if (!button) continue;
+
                 uint8_t has_event;
+                // Botões circulares vs retangulares
+                // 0-3 são circulares (A, B, Turbo), 4-7 são longos (Select, Start, Save, Load)
                 if (i < 4)
-                    has_event = is_within_circle((int) x, (int) y, button->x, button->y,
-                                                 button->r);
+                    has_event = is_within_circle((int) x, (int) y, button->x, button->y, button->r);
                 else
                     has_event = is_within_bound((int) x, (int) y, &button->dest);
 
@@ -236,16 +255,19 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                     was_button_pressed = 1;
                     button->active = 1;
                     button->finger = event->tfinger.fingerID;
-                    // type as button press
-                    LOG(DEBUG, "Button pressed");
-                    key |= button->id;
-                    if(button->id == TURBO_A) {
-                        // set button A
-                        key |= BUTTON_A;
-                    }
-                    if(key == TURBO_B) {
-                        // set button B
-                        key |= BUTTON_B;
+                    
+                    // Ação específica para Save/Load (dispara uma vez)
+                    if (button->id == BTN_ID_SAVE) {
+                        LOG(INFO, "Touch Save detected");
+                        save_state(touch_pad.emulator, "save.dat");
+                    } else if (button->id == BTN_ID_LOAD) {
+                        LOG(INFO, "Touch Load detected");
+                        load_state(touch_pad.emulator, "save.dat");
+                    } else {
+                        // Botões de controle (mantêm pressionado)
+                        key |= button->id;
+                        if(button->id == TURBO_A) key |= BUTTON_A;
+                        if(button->id == TURBO_B) key |= BUTTON_B;
                     }
                 }
             }
@@ -348,7 +370,8 @@ void free_touch_pad(){
     if(touch_pad.g_ctx == NULL)
         return;
     for(int i = 0; i < TOUCH_BUTTON_COUNT; i++)
-        SDL_DestroyTexture(touch_pad.buttons[i]->texture);
+        if(touch_pad.buttons[i] && touch_pad.buttons[i]->texture)
+            SDL_DestroyTexture(touch_pad.buttons[i]->texture);
     SDL_DestroyTexture(touch_pad.axis.joy_tx);
     SDL_DestroyTexture(touch_pad.axis.bg_tx);
     LOG(DEBUG, "Touchpad cleanup complete");
