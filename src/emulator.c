@@ -172,7 +172,8 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     init_cpu(emulator);
     init_APU(emulator);
     init_timer(&emulator->timer, PERIOD);
-    ANDROID_INIT_TOUCH_PAD(g_ctx);
+    // Passamos o emulador inteiro para o touchpad ter acesso ao save_state
+    ANDROID_INIT_TOUCH_PAD(emulator);
 
     emulator->exit = 0;
     emulator->pause = 0;
@@ -296,9 +297,9 @@ void run_emulator(struct Emulator* emulator){
                 frame_count = 0;
             }
 
-            // Passar FPS para a função de renderização
+            // Renderiza com FPS
             render_graphics(g_ctx, ppu->screen, current_fps);
-            
+
             ppu->render = 0;
             queue_audio(apu, g_ctx);
             mark_end(timer);
