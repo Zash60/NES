@@ -34,7 +34,7 @@ typedef struct TouchAxis{
 typedef struct  TouchButton{
     SDL_Texture * texture;
     SDL_FRect dest;
-    uint32_t id; // Alterado de KeyPad para uint32_t para suportar IDs customizados (Save/Load)
+    uint32_t id;
     int x;
     int y;
     int r;
@@ -43,8 +43,10 @@ typedef struct  TouchButton{
     SDL_FingerID finger;
 } TouchButton;
 
-// Aumentado para incluir Save e Load
-#define TOUCH_BUTTON_COUNT 8
+// Aumentado para incluir Menu (8 botões no total: A, B, X, Y, Select, Start, Menu)
+// Save/Load foram removidos daqui para o menu de pausa, mas o Menu Button é essencial
+#define TOUCH_BUTTON_COUNT 7
+#define BTN_ID_MENU 0x30000
 
 typedef struct TouchPad{
     uint16_t status;
@@ -54,19 +56,22 @@ typedef struct TouchPad{
     TouchButton turboB;
     TouchButton select;
     TouchButton start;
-    TouchButton save; // Novo botão
-    TouchButton load; // Novo botão
+    TouchButton menu;
+    
     TouchButton* buttons[TOUCH_BUTTON_COUNT];
     TouchAxis axis;
     GraphicsContext* g_ctx;
-    struct Emulator* emulator; // Referência ao emulador para chamar save/load
+    struct Emulator* emulator;
     TTF_Font * font;
+    
+    // Flags para modo de edição
+    uint8_t edit_mode; 
+    TouchButton* selected_button;
 } TouchPad;
 
 // forward declaration
 struct JoyPad;
 
-// Atualizado para receber struct Emulator*
 void init_touch_pad(struct Emulator* emulator);
 void free_touch_pad();
 void render_touch_controls(GraphicsContext* ctx);
