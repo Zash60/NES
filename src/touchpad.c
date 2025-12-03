@@ -5,17 +5,22 @@
 
 #include "utils.h"
 #include "touchpad.h"
-#include "emulator.h" // Necessário para save_state/load_state
+#include "emulator.h"
 
 #ifndef M_PI
 #define M_PI		3.14159265358979323846
 #endif
 
-// IDs internos para os botões de sistema (fora do enum KeyPad)
+// IDs internos para os botões de sistema
 #define BTN_ID_SAVE 0x10000
 #define BTN_ID_LOAD 0x20000
 
+// Tempo de espera em milissegundos entre saves/loads para evitar travamentos
+#define SAVE_LOAD_COOLDOWN 1000 
+
 static TouchPad touch_pad;
+// Variável estática para controlar o tempo da última ação
+static uint32_t last_state_action_time = 0;
 
 enum{
     BUTTON_CIRCLE,
@@ -48,7 +53,7 @@ void init_touch_pad(struct Emulator* emulator){
     int anchor_y = ctx->screen_height - offset;
     int anchor_x = ctx->screen_width - offset;
     int anchor_mid = (int)(ctx->screen_height * 0.3);
-    int top_y = (int)(ctx->screen_height * 0.1); // Posição Y para Save/Load
+    int top_y = (int)(ctx->screen_height * 0.1); 
 
     SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 255);
 
@@ -60,14 +65,16 @@ void init_touch_pad(struct Emulator* emulator){
     init_button(&touch_pad.select, SELECT, 4, BUTTON_LONG,"Select",  offset, anchor_mid, ctx->font);
     init_button(&touch_pad.start, START, 5, BUTTON_LONG," Start ",  anchor_x, anchor_mid, ctx->font);
 
-    // Botões de Sistema (Save/Load)
-    // Load no canto superior esquerdo, Save no canto superior direito (ou adjacentes)
+    // Botões de Sistema
     init_button(&touch_pad.load, BTN_ID_LOAD, 6, BUTTON_LONG, "Load", offset, top_y, ctx->font);
     init_button(&touch_pad.save, BTN_ID_SAVE, 7, BUTTON_LONG, "Save", ctx->screen_width - offset, top_y, ctx->font);
 
     init_axis(ctx, offset, anchor_y);
 
     SDL_SetRenderDrawColor(ctx->renderer, 0, 0, 0, 255);
+    
+    // Inicializa o timer
+    last_state_action_time = 0;
 
     LOG(DEBUG, "Initialized touch controls");
 }
@@ -197,6 +204,8 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
     }
     uint16_t key = joyPad->status;
     double x, y;
+    uint32_t current_time = SDL_GetTicks();
+
     switch (event->type) {
         case SDL_EVENT_FINGER_UP: {
             x = event->tfinger.x;
@@ -244,8 +253,7 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                 if (!button) continue;
 
                 uint8_t has_event;
-                // Botões circulares vs retangulares
-                // 0-3 são circulares (A, B, Turbo), 4-7 são longos (Select, Start, Save, Load)
+                // Botões circulares (0-3) vs retangulares (4-7)
                 if (i < 4)
                     has_event = is_within_circle((int) x, (int) y, button->x, button->y, button->r);
                 else
@@ -256,15 +264,25 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                     button->active = 1;
                     button->finger = event->tfinger.fingerID;
                     
-                    // Ação específica para Save/Load (dispara uma vez)
+                    // Verifica Cooldown para Save/Load
                     if (button->id == BTN_ID_SAVE) {
-                        LOG(INFO, "Touch Save detected");
-                        save_state(touch_pad.emulator, "save.dat");
+                        if (current_time > last_state_action_time + SAVE_LOAD_COOLDOWN) {
+                            LOG(INFO, "Touch Save triggered");
+                            save_state(touch_pad.emulator, "save.dat");
+                            last_state_action_time = current_time;
+                        } else {
+                            LOG(DEBUG, "Save ignored (cooldown)");
+                        }
                     } else if (button->id == BTN_ID_LOAD) {
-                        LOG(INFO, "Touch Load detected");
-                        load_state(touch_pad.emulator, "save.dat");
+                        if (current_time > last_state_action_time + SAVE_LOAD_COOLDOWN) {
+                            LOG(INFO, "Touch Load triggered");
+                            load_state(touch_pad.emulator, "save.dat");
+                            last_state_action_time = current_time;
+                        } else {
+                            LOG(DEBUG, "Load ignored (cooldown)");
+                        }
                     } else {
-                        // Botões de controle (mantêm pressionado)
+                        // Botões de controle
                         key |= button->id;
                         if(button->id == TURBO_A) key |= BUTTON_A;
                         if(button->id == TURBO_B) key |= BUTTON_B;
