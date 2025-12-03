@@ -8,6 +8,9 @@
 #include "gfx.h"
 #include "controller.h"
 
+// Forward declaration
+struct Emulator;
+
 typedef struct TouchAxis{
     int x;
     int y;
@@ -31,7 +34,7 @@ typedef struct TouchAxis{
 typedef struct  TouchButton{
     SDL_Texture * texture;
     SDL_FRect dest;
-    KeyPad id;
+    uint32_t id; // Alterado de KeyPad para uint32_t para suportar IDs customizados (Save/Load)
     int x;
     int y;
     int r;
@@ -40,7 +43,8 @@ typedef struct  TouchButton{
     SDL_FingerID finger;
 } TouchButton;
 
-#define TOUCH_BUTTON_COUNT 6
+// Aumentado para incluir Save e Load
+#define TOUCH_BUTTON_COUNT 8
 
 typedef struct TouchPad{
     uint16_t status;
@@ -50,28 +54,32 @@ typedef struct TouchPad{
     TouchButton turboB;
     TouchButton select;
     TouchButton start;
+    TouchButton save; // Novo botão
+    TouchButton load; // Novo botão
     TouchButton* buttons[TOUCH_BUTTON_COUNT];
     TouchAxis axis;
     GraphicsContext* g_ctx;
+    struct Emulator* emulator; // Referência ao emulador para chamar save/load
     TTF_Font * font;
 } TouchPad;
 
 // forward declaration
 struct JoyPad;
 
-void init_touch_pad(GraphicsContext* ctx);
+// Atualizado para receber struct Emulator*
+void init_touch_pad(struct Emulator* emulator);
 void free_touch_pad();
 void render_touch_controls(GraphicsContext* ctx);
 void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event);
 
-#define ANDROID_INIT_TOUCH_PAD(CTX) init_touch_pad(CTX)
+#define ANDROID_INIT_TOUCH_PAD(EMU) init_touch_pad(EMU)
 #define ANDROID_FREE_TOUCH_PAD() free_touch_pad()
 #define ANDROID_RENDER_TOUCH_CONTROLS(CTX) render_touch_controls(CTX)
 #define ANDROID_TOUCHPAD_MAPPER(JOYPAD, EVENT) touchpad_mapper(JOYPAD, EVENT)
 
 #else
 
-#define ANDROID_INIT_TOUCH_PAD(CTX)
+#define ANDROID_INIT_TOUCH_PAD(EMU)
 #define ANDROID_FREE_TOUCH_PAD()
 #define ANDROID_RENDER_TOUCH_CONTROLS(CTX)
 #define ANDROID_TOUCHPAD_MAPPER(JOYPAD, EVENT)
