@@ -48,6 +48,7 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
             context.startActivity(intent);
         });
 
+        // Opcional: Botão Magic (Game Genie)
         holder.magicButton.setOnClickListener(v -> {
             if(holder.item == null || !holder.item.isNES())
                 return;
@@ -75,7 +76,7 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
                     // Add a badge to distinguish NSF from NES roms
                     Drawable[] layers = new Drawable[2];
                     layers[0] = resource;
-                    layers[1] = ContextCompat.getDrawable(context, R.drawable.ic_badge_music); // this is the image you want to overlay.
+                    layers[1] = ContextCompat.getDrawable(context, R.drawable.ic_badge_music); 
                     LayerDrawable drawable = new LayerDrawable(layers);
                     holder.gameImage.setImageDrawable(drawable);
                 }
@@ -92,8 +93,9 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
 
         holder.playButton.setText(item.isNES()? context.getString(R.string.play) : context.getString(R.string.listen));
 
-        MainActivity activity = (MainActivity) context;
-        if(activity.hasGenie && item.isNES())
+        // CORREÇÃO: Removida a verificação de activity.hasGenie
+        // Se for um jogo NES, mostra o botão magic (pode ser ajustado conforme necessidade)
+        if(item.isNES())
             holder.magicButton.setVisibility(View.VISIBLE);
         else
             holder.magicButton.setVisibility(View.GONE);
