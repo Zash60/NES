@@ -127,7 +127,8 @@ static void render_fps_text(GraphicsContext* ctx, float fps) {
     snprintf(fps_str, sizeof(fps_str), "FPS: %.1f", fps);
 
     SDL_Color color = {0, 255, 0, 255}; // Verde
-    SDL_Surface* surface = TTF_RenderText_Solid(ctx->font, fps_str, color);
+    // Correção: Adicionado o argumento 0 (length) para SDL3_ttf
+    SDL_Surface* surface = TTF_RenderText_Solid(ctx->font, fps_str, 0, color);
     if (surface) {
         SDL_Texture* texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
         if (texture) {
