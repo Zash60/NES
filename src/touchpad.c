@@ -11,16 +11,7 @@
 #define M_PI		3.14159265358979323846
 #endif
 
-// IDs internos para os botões de sistema
-#define BTN_ID_SAVE 0x10000
-#define BTN_ID_LOAD 0x20000
-
-// Tempo de espera em milissegundos entre saves/loads para evitar travamentos
-#define SAVE_LOAD_COOLDOWN 1000 
-
 static TouchPad touch_pad;
-// Variável estática para controlar o tempo da última ação
-static uint32_t last_state_action_time = 0;
 
 enum{
     BUTTON_CIRCLE,
@@ -42,6 +33,8 @@ void init_touch_pad(struct Emulator* emulator){
     
     touch_pad.emulator = emulator;
     touch_pad.g_ctx = ctx;
+    touch_pad.edit_mode = 0;
+    touch_pad.selected_button = NULL;
     
     int font_size = (int)((ctx->screen_height * 0.08));
     touch_pad.font = TTF_OpenFont("asap.ttf", (font_size * 4)/3);
@@ -53,29 +46,22 @@ void init_touch_pad(struct Emulator* emulator){
     int anchor_y = ctx->screen_height - offset;
     int anchor_x = ctx->screen_width - offset;
     int anchor_mid = (int)(ctx->screen_height * 0.3);
-    int top_y = (int)(ctx->screen_height * 0.1); 
 
     SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 255);
 
-    // Botões de Jogo
+    // Inicialização dos botões
     init_button(&touch_pad.A, BUTTON_A, 0, BUTTON_CIRCLE, "A", anchor_x, anchor_y - offset/2, touch_pad.font);
     init_button(&touch_pad.turboA, TURBO_A, 1, BUTTON_CIRCLE, "X",  anchor_x, anchor_y + offset/2, touch_pad.font);
     init_button(&touch_pad.B, BUTTON_B, 2, BUTTON_CIRCLE, "B",  anchor_x - offset/2, anchor_y, touch_pad.font);
     init_button(&touch_pad.turboB, TURBO_B, 3, BUTTON_CIRCLE, "Y",  anchor_x + offset/2, anchor_y, touch_pad.font);
     init_button(&touch_pad.select, SELECT, 4, BUTTON_LONG,"Select",  offset, anchor_mid, ctx->font);
     init_button(&touch_pad.start, START, 5, BUTTON_LONG," Start ",  anchor_x, anchor_mid, ctx->font);
-
-    // Botões de Sistema
-    init_button(&touch_pad.load, BTN_ID_LOAD, 6, BUTTON_LONG, "Load", offset, top_y, ctx->font);
-    init_button(&touch_pad.save, BTN_ID_SAVE, 7, BUTTON_LONG, "Save", ctx->screen_width - offset, top_y, ctx->font);
+    // Botão Menu (posicionado no topo central)
+    init_button(&touch_pad.menu, BTN_ID_MENU, 6, BUTTON_LONG, "Menu", ctx->screen_width/2, font_size, ctx->font);
 
     init_axis(ctx, offset, anchor_y);
 
     SDL_SetRenderDrawColor(ctx->renderer, 0, 0, 0, 255);
-    
-    // Inicializa o timer
-    last_state_action_time = 0;
-
     LOG(DEBUG, "Initialized touch controls");
 }
 
@@ -189,6 +175,10 @@ void render_touch_controls(GraphicsContext* ctx){
     for(int i = 0; i < TOUCH_BUTTON_COUNT; i++){
         TouchButton* button = touch_pad.buttons[i];
         if (button) {
+            // Efeito visual se estiver em modo de edição
+            if(touch_pad.edit_mode) SDL_SetTextureAlphaMod(button->texture, 200);
+            else SDL_SetTextureAlphaMod(button->texture, 255);
+            
             SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
         }
     }
@@ -196,122 +186,131 @@ void render_touch_controls(GraphicsContext* ctx){
 
 
 void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
-    if(!touch_pad.g_ctx)
-        return;
-    // single player support
-    if(joyPad->player != 0){
-        return;
-    }
+    if(!touch_pad.g_ctx) return;
+    if(joyPad->player != 0) return;
+
     uint16_t key = joyPad->status;
     double x, y;
-    uint32_t current_time = SDL_GetTicks();
+    
+    // Exponha o touchpad globalmente (se necessário, melhor seria via getter)
+    // Mas aqui estamos no arquivo onde `touch_pad` é static, então acesso direto ok.
 
+    // Se o jogo estiver pausado, não processe inputs de jogo, apenas verifique colisão com Menu
+    // (O menu visual é tratado no loop principal, aqui tratamos apenas estado físico)
+    
     switch (event->type) {
         case SDL_EVENT_FINGER_UP: {
             x = event->tfinger.x;
             y = event->tfinger.y;
             to_abs_position(&x, &y);
+            
+            // Limpa seleção do modo de edição
+            if (touch_pad.edit_mode) {
+                touch_pad.selected_button = NULL;
+                return;
+            }
+
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *button = touch_pad.buttons[i];
                 if (button && button->active && button->finger == event->tfinger.fingerID) {
                     button->active = 0;
                     button->finger = -1;
-                    
-                    // Botões normais são liberados
-                    if (button->id < BTN_ID_SAVE) {
+                    if (button->id < BTN_ID_MENU) { // Apenas botões de jogo
                          key &= ~button->id;
                          if(button->id == TURBO_A) key &= ~BUTTON_A;
                          if(button->id == TURBO_B) key &= ~BUTTON_B;
                     }
-                    
-                    LOG(DEBUG, "Released button finger id: %d", event->tfinger.fingerID);
                 }
             }
-
-            // handle axis
+            
+            // Axis reset
             TouchAxis *axis = &touch_pad.axis;
             if (axis->finger == event->tfinger.fingerID && axis->active) {
                 axis->active = 0;
                 axis->finger = -1;
-                // reset all axis ids
                 axis->v_latch = axis->h_latch = 0;
                 key &= ~(RIGHT | LEFT | UP | DOWN);
                 axis->inner_x = axis->x = axis->origin_x;
                 axis->inner_y = axis->y = axis->origin_y;
-                LOG(DEBUG, "Reset axis");
             }
-
             break;
         }
         case SDL_EVENT_FINGER_DOWN: {
             x = event->tfinger.x;
             y = event->tfinger.y;
             to_abs_position(&x, &y);
-            int was_button_pressed = 0;
+
+            // 1. Verificar Botões
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *button = touch_pad.buttons[i];
                 if (!button) continue;
 
                 uint8_t has_event;
-                // Botões circulares (0-3) vs retangulares (4-7)
-                if (i < 4)
-                    has_event = is_within_circle((int) x, (int) y, button->x, button->y, button->r);
-                else
+                // Menu é botão 6 (índice 6), Select/Start são longos
+                if (button->id == BTN_ID_MENU || button->id == SELECT || button->id == START)
                     has_event = is_within_bound((int) x, (int) y, &button->dest);
+                else
+                    has_event = is_within_circle((int) x, (int) y, button->x, button->y, button->r);
 
                 if (has_event) {
-                    was_button_pressed = 1;
+                    // MODO EDIÇÃO: Selecionar para arrastar
+                    if (touch_pad.edit_mode) {
+                        touch_pad.selected_button = button;
+                        return;
+                    }
+                    
+                    // MODO NORMAL
                     button->active = 1;
                     button->finger = event->tfinger.fingerID;
                     
-                    // Verifica Cooldown para Save/Load
-                    if (button->id == BTN_ID_SAVE) {
-                        if (current_time > last_state_action_time + SAVE_LOAD_COOLDOWN) {
-                            LOG(INFO, "Touch Save triggered");
-                            save_state(touch_pad.emulator, "save.dat");
-                            last_state_action_time = current_time;
-                        } else {
-                            LOG(DEBUG, "Save ignored (cooldown)");
-                        }
-                    } else if (button->id == BTN_ID_LOAD) {
-                        if (current_time > last_state_action_time + SAVE_LOAD_COOLDOWN) {
-                            LOG(INFO, "Touch Load triggered");
-                            load_state(touch_pad.emulator, "save.dat");
-                            last_state_action_time = current_time;
-                        } else {
-                            LOG(DEBUG, "Load ignored (cooldown)");
-                        }
-                    } else {
-                        // Botões de controle
+                    if (button->id == BTN_ID_MENU) {
+                        // Alterna Pausa
+                        touch_pad.emulator->pause = !touch_pad.emulator->pause;
+                        LOG(INFO, "Menu Pressed. Pause: %d", touch_pad.emulator->pause);
+                    } else if (!touch_pad.emulator->pause) {
                         key |= button->id;
                         if(button->id == TURBO_A) key |= BUTTON_A;
                         if(button->id == TURBO_B) key |= BUTTON_B;
                     }
+                    // Se clicou num botão, não processa axis
+                    break; 
                 }
             }
-            if(was_button_pressed)
-                break;
 
-            // handle axis
-            TouchAxis *axis = &touch_pad.axis;
-            if (x < touch_pad.g_ctx->screen_width / 2 ){
-                // left side of the screen
-                axis->active = 1;
-                axis->finger = event->tfinger.fingerID;
-                axis->x = axis->inner_x = (int) x;
-                axis->y = axis->inner_y = (int) y;
+            // 2. Verificar Axis (apenas se não pausado e não editando)
+            if (!touch_pad.emulator->pause && !touch_pad.edit_mode) {
+                TouchAxis *axis = &touch_pad.axis;
+                // Área esquerda da tela para o analógico
+                if (x < touch_pad.g_ctx->screen_width / 2 ){
+                    axis->active = 1;
+                    axis->finger = event->tfinger.fingerID;
+                    axis->x = axis->inner_x = (int) x;
+                    axis->y = axis->inner_y = (int) y;
+                }
             }
-
             break;
         }
         case SDL_EVENT_FINGER_MOTION: {
-            TouchAxis *axis = &touch_pad.axis;
-            if(!axis->active || axis->finger != event->tfinger.fingerID)
-                break;
-
             x = event->tfinger.x;
             y = event->tfinger.y;
             to_abs_position(&x, &y);
+
+            // MODO EDIÇÃO: Arrastar botão
+            if (touch_pad.edit_mode && touch_pad.selected_button) {
+                touch_pad.selected_button->x = (int)x;
+                touch_pad.selected_button->y = (int)y;
+                touch_pad.selected_button->dest.x = x - touch_pad.selected_button->dest.w/2;
+                touch_pad.selected_button->dest.y = y - touch_pad.selected_button->dest.h/2;
+                return;
+            }
+            
+            // Se pausado, ignorar movimento
+            if (touch_pad.emulator->pause) return;
+
+            // Lógica do Axis
+            TouchAxis *axis = &touch_pad.axis;
+            if(!axis->active || axis->finger != event->tfinger.fingerID)
+                break;
 
             int a = angle(touch_pad.axis.x, touch_pad.axis.y, (int)x, (int)y);
             int d = (int) sqrt(pow(x - axis->x, 2) + pow(y - axis->y, 2));
@@ -319,7 +318,6 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
 
             int new_x = (int) x;
             int new_y = (int) y;
-
 
             if (d > r) {
                 new_x = (int)(r * cos(a * M_PI / 180) + axis->x);
@@ -331,35 +329,27 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
             update_joy_pos();
 
             if (d < axis->r / 2) {
-                // delta is too small to be reliable
                 key &= ~(RIGHT | LEFT | UP | DOWN);
                 break;
             }
 
-            if(a < 60 || a > 300)
-                key |= RIGHT;
-            else
-                key &= ~RIGHT;
-
-            if(a > 30 && a < 150)
-                key |= DOWN;
-            else
-                key &= ~DOWN;
-
-            if(a > 120 && a < 240)
-                key |= LEFT;
-            else
-                key &= ~LEFT;
-
-            if(a > 210 && a < 330)
-                key |= UP;
-            else
-                key &= ~UP;
+            if(a < 60 || a > 300) key |= RIGHT; else key &= ~RIGHT;
+            if(a > 30 && a < 150) key |= DOWN; else key &= ~DOWN;
+            if(a > 120 && a < 240) key |= LEFT; else key &= ~LEFT;
+            if(a > 210 && a < 330) key |= UP; else key &= ~UP;
         }
         default:
             break;
     }
     joyPad->status = key;
+}
+
+// Permite acesso ao edit_mode a partir do emulator.c
+void toggle_edit_mode() {
+    touch_pad.edit_mode = !touch_pad.edit_mode;
+}
+uint8_t is_edit_mode() {
+    return touch_pad.edit_mode;
 }
 
 
