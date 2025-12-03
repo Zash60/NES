@@ -1,4 +1,5 @@
 #include <SDL.h>
+#include <stdio.h> // Necessário para snprintf
 
 #include "gfx.h"
 #include "utils.h"
@@ -7,6 +8,9 @@
 #ifdef __ANDROID__
 #include "touchpad.h"
 #endif
+
+// Declaração da função interna para desenhar FPS
+static void render_fps_text(GraphicsContext* ctx, float fps);
 
 void get_graphics_context(GraphicsContext* ctx){
 
@@ -97,7 +101,7 @@ void get_graphics_context(GraphicsContext* ctx){
     LOG(DEBUG, "Initialized SDL subsystem");
 }
 
-void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer){
+void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps){
     SDL_RenderClear(g_ctx->renderer);
     SDL_UpdateTexture(g_ctx->texture, NULL, buffer, (int)(g_ctx->width * sizeof(uint32_t)));
 #ifdef __ANDROID__
@@ -106,8 +110,34 @@ void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer){
 #else
     SDL_RenderTexture(g_ctx->renderer, g_ctx->texture, NULL, NULL);
 #endif
+
+    // Renderizar o FPS se for válido (>= 0)
+    if (fps >= 0.0f) {
+        render_fps_text(g_ctx, fps);
+    }
+
     SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 255);
     SDL_RenderPresent(g_ctx->renderer);
+}
+
+static void render_fps_text(GraphicsContext* ctx, float fps) {
+    if (!ctx->font) return;
+
+    char fps_str[32];
+    snprintf(fps_str, sizeof(fps_str), "FPS: %.1f", fps);
+
+    SDL_Color color = {0, 255, 0, 255}; // Verde
+    SDL_Surface* surface = TTF_RenderText_Solid(ctx->font, fps_str, color);
+    if (surface) {
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
+        if (texture) {
+            // Desenhar no canto superior esquerdo com uma pequena margem
+            SDL_FRect dest = {10.0f, 10.0f, (float)surface->w, (float)surface->h}; 
+            SDL_RenderTexture(ctx->renderer, texture, NULL, &dest);
+            SDL_DestroyTexture(texture);
+        }
+        SDL_DestroySurface(surface);
+    }
 }
 
 void free_graphics(GraphicsContext* ctx){
