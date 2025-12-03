@@ -44,5 +44,7 @@ typedef struct Emulator{
 void init_emulator(Emulator* emulator, int argc, char *argv[]);
 void reset_emulator(Emulator* emulator);
 void run_emulator(Emulator* emulator);
+void save_state(Emulator* emulator, const char* filename);
+void load_state(Emulator* emulator, const char* filename);
 void run_NSF_player(Emulator* emulator);
 void free_emulator(Emulator* emulator);
