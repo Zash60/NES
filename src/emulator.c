@@ -12,6 +12,102 @@
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
+// --- Estruturas para Serialização do Save State ---
+typedef struct {
+    uint16_t pc;
+    uint8_t ac, x, y, sr, sp;
+} CPUSnapshot;
+
+typedef struct {
+    uint8_t V_RAM[0x1000];
+    uint8_t OAM[256];
+    uint8_t palette[0x20];
+    uint8_t ctrl, mask, status;
+    uint8_t oam_address;
+    uint16_t v, t;
+    uint8_t x, w;
+} PPUSnapshot;
+
+void save_state(Emulator* emulator, const char* filename) {
+    FILE* f = fopen(filename, "wb");
+    if (!f) {
+        LOG(ERROR, "Failed to save state to %s", filename);
+        return;
+    }
+
+    // 1. Salvar CPU
+    CPUSnapshot cpu_snap = {
+        .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x,
+        .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp
+    };
+    fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
+
+    // 2. Salvar RAM Principal
+    fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+
+    // 3. Salvar PPU
+    PPUSnapshot ppu_snap;
+    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, sizeof(ppu_snap.V_RAM));
+    memcpy(ppu_snap.OAM, emulator->ppu.OAM, sizeof(ppu_snap.OAM));
+    memcpy(ppu_snap.palette, emulator->ppu.palette, sizeof(ppu_snap.palette));
+    ppu_snap.ctrl = emulator->ppu.ctrl;
+    ppu_snap.mask = emulator->ppu.mask;
+    ppu_snap.status = emulator->ppu.status;
+    ppu_snap.oam_address = emulator->ppu.oam_address;
+    ppu_snap.v = emulator->ppu.v;
+    ppu_snap.t = emulator->ppu.t;
+    ppu_snap.x = emulator->ppu.x;
+    ppu_snap.w = emulator->ppu.w;
+    fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+    
+    // Nota: Mappers complexos (MMC1, MMC3) precisariam de logica extra para salvar
+    // o estado de seus registradores internos e ponteiros de banco.
+    // Esta implementação cobre jogos mais simples (NROM, CNROM, etc).
+
+    fclose(f);
+    LOG(INFO, "State saved to %s", filename);
+}
+
+void load_state(Emulator* emulator, const char* filename) {
+    FILE* f = fopen(filename, "rb");
+    if (!f) {
+        LOG(ERROR, "Failed to load state from %s", filename);
+        return;
+    }
+
+    // 1. Carregar CPU
+    CPUSnapshot cpu_snap;
+    if (fread(&cpu_snap, sizeof(CPUSnapshot), 1, f) != 1) { fclose(f); return; }
+    emulator->cpu.pc = cpu_snap.pc;
+    emulator->cpu.ac = cpu_snap.ac;
+    emulator->cpu.x = cpu_snap.x;
+    emulator->cpu.y = cpu_snap.y;
+    emulator->cpu.sr = cpu_snap.sr;
+    emulator->cpu.sp = cpu_snap.sp;
+
+    // 2. Carregar RAM
+    fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+
+    // 3. Carregar PPU
+    PPUSnapshot ppu_snap;
+    if (fread(&ppu_snap, sizeof(PPUSnapshot), 1, f) != 1) { fclose(f); return; }
+    
+    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, sizeof(ppu_snap.V_RAM));
+    memcpy(emulator->ppu.OAM, ppu_snap.OAM, sizeof(ppu_snap.OAM));
+    memcpy(emulator->ppu.palette, ppu_snap.palette, sizeof(ppu_snap.palette));
+    emulator->ppu.ctrl = ppu_snap.ctrl;
+    emulator->ppu.mask = ppu_snap.mask;
+    emulator->ppu.status = ppu_snap.status;
+    emulator->ppu.oam_address = ppu_snap.oam_address;
+    emulator->ppu.v = ppu_snap.v;
+    emulator->ppu.t = ppu_snap.t;
+    emulator->ppu.x = ppu_snap.x;
+    emulator->ppu.w = ppu_snap.w;
+
+    fclose(f);
+    LOG(INFO, "State loaded from %s", filename);
+}
+
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(argc < 2) {
         LOG(ERROR, "Input file not provided");
@@ -101,6 +197,11 @@ void run_emulator(struct Emulator* emulator){
     init_timer(&frame_timer, PERIOD);
     mark_start(&frame_timer);
 
+    // Variáveis para cálculo de FPS
+    uint64_t frame_count = 0;
+    uint64_t last_fps_time = SDL_GetTicks();
+    float current_fps = 0.0f;
+
     while (!emulator->exit) {
 #if PROFILE
         if(PROFILE_STOP_FRAME && ppu->frames >= PROFILE_STOP_FRAME)
@@ -126,6 +227,12 @@ void run_emulator(struct Emulator* emulator){
                             break;
                         case SDLK_F5:
                             reset_emulator(emulator);
+                            break;
+                        case SDLK_F6:
+                            save_state(emulator, "save.dat");
+                            break;
+                        case SDLK_F7:
+                            load_state(emulator, "save.dat");
                             break;
                         default:
                             break;
@@ -180,7 +287,18 @@ void run_emulator(struct Emulator* emulator){
 #if NAMETABLE_MODE
             render_name_tables(ppu, ppu->screen);
 #endif
-            render_graphics(g_ctx, ppu->screen);
+            // Cálculo de FPS
+            frame_count++;
+            uint64_t current_time = SDL_GetTicks();
+            if (current_time > last_fps_time + 1000) {
+                current_fps = frame_count / ((current_time - last_fps_time) / 1000.0f);
+                last_fps_time = current_time;
+                frame_count = 0;
+            }
+
+            // Passar FPS para a função de renderização
+            render_graphics(g_ctx, ppu->screen, current_fps);
+            
             ppu->render = 0;
             queue_audio(apu, g_ctx);
             mark_end(timer);
