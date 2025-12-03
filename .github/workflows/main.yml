@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive  # <--- ESTA LINHA CORRIGE O ERRO DO CMAKE
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -28,7 +30,7 @@ jobs:
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d
+          ndk-version: r25c  # Recomendo usar r25c ou r23b, pois versões muito novas (r26+) podem ter conflitos com SDL antigo
 
       - name: Grant execute permission for gradlew
         working-directory: ./android
