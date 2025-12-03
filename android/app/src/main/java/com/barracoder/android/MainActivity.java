@@ -5,7 +5,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
-import android.widget.TextView;
+import android.widget.TextView; // Importante: TextView se usar o layout novo, ou LinearLayout se usar o antigo
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -21,16 +21,26 @@ public class MainActivity extends AppCompatActivity {
     ArrayList<NESItemModel> list;
     RecyclerView recyclerView;
     NESItemAdapter adapter;
-    TextView emptyState;
+    // Se usar o layout XML anterior que enviei, o ID era emptyStateText (TextView) ou emptyStateLayout (LinearLayout)
+    // Vou assumir o TextView do último XML enviado.
+    View emptyState; 
+    private static final String TAG = "MainActivity";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        
         recyclerView = findViewById(R.id.NESRecyclerView);
-        emptyState = findViewById(R.id.emptyStateText);
+        
+        // Tenta encontrar o view de estado vazio (pode ser TextView ou Layout dependendo do XML usado)
+        emptyState = findViewById(R.id.emptyStateText); 
+        if (emptyState == null) emptyState = findViewById(R.id.emptyStateLayout);
+
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
+        
         loadGames();
+        
         findViewById(R.id.openROMBtn).setOnClickListener(v -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -50,17 +60,22 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        // Assets (Opcional)
+        
+        // Opcional: Carregar de Assets se houver
         try {
             String[] assets = getAssets().list("roms");
-            if(assets != null) for(String r : assets) list.add(new NESItemModel(null, r.replace(".nes",""), "roms/"+r));
+            if(assets != null) {
+                for(String r : assets) {
+                     list.add(new NESItemModel(null, r.replace(".nes",""), "roms/"+r));
+                }
+            }
         } catch (IOException e) {}
 
         if (list.isEmpty()) {
-            emptyState.setVisibility(View.VISIBLE);
+            if(emptyState != null) emptyState.setVisibility(View.VISIBLE);
             recyclerView.setVisibility(View.GONE);
         } else {
-            emptyState.setVisibility(View.GONE);
+            if(emptyState != null) emptyState.setVisibility(View.GONE);
             recyclerView.setVisibility(View.VISIBLE);
             adapter = new NESItemAdapter(MainActivity.this, list);
             recyclerView.setAdapter(adapter);
@@ -79,16 +94,24 @@ public class MainActivity extends AppCompatActivity {
     private void importRom(Uri uri) {
         try {
             String fileName = "game_" + System.currentTimeMillis() + ".nes";
-            // Tentar pegar nome real via cursor... (Simplificado para brevidade)
+            // Tentar obter nome real (simplificado)
+            android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (nameIndex != -1) fileName = cursor.getString(nameIndex);
+                cursor.close();
+            }
+
             InputStream is = getContentResolver().openInputStream(uri);
             File dest = new File(getFilesDir(), fileName);
             OutputStream os = new FileOutputStream(dest);
             byte[] buf = new byte[4096]; int len;
             while ((len = is.read(buf)) > 0) os.write(buf, 0, len);
             os.close(); is.close();
-            Toast.makeText(this, "Jogo Importado!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Importado: " + fileName, Toast.LENGTH_SHORT).show();
             loadGames();
         } catch (Exception e) {
+            Log.e(TAG, "Import error", e);
             Toast.makeText(this, "Erro ao importar", Toast.LENGTH_SHORT).show();
         }
     }
