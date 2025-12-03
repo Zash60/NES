@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 
 #include "ppu.h"
 #include "utils.h"
@@ -9,12 +10,68 @@
 static uint16_t render_background(PPU* ppu);
 static uint16_t render_sprites(PPU* ppu, uint16_t bg_addr, uint8_t* back_priority);
 static void update_NMI(PPU* ppu);
+
+// Array global que será usado para renderizar
 uint32_t nes_palette[64];
 static size_t screen_size;
 
+// --- Definições das Paletas ---
+
+// 1. Padrão (NTSC genérico)
+static const uint32_t palette_default[64] = {
+    0xff666666, 0xff002a88, 0xff1412a7, 0xff3b00a4, 0xff5c007e, 0xff6e0040, 0xff6c0600, 0xff561d00,
+    0xff333500, 0xff0b4800, 0xff005200, 0xff004f08, 0xff00404d, 0xff000000, 0xff000000, 0xff000000,
+    0xffadadad, 0xff155fd9, 0xff4240ff, 0xff7527fe, 0xffa01acc, 0xffb71e7b, 0xffb53120, 0xff994e00,
+    0xff6b6d00, 0xff388700, 0xff0c9300, 0xff008f32, 0xff007c8d, 0xff000000, 0xff000000, 0xff000000,
+    0xfffffeff, 0xff64b0ff, 0xff9290ff, 0xffc676ff, 0xfff36aff, 0xfffe6ecc, 0xfffe8170, 0xffea9e22,
+    0xffbcbe00, 0xff88d800, 0xff5ce430, 0xff45e082, 0xff48cdde, 0xff4f4f4f, 0xff000000, 0xff000000,
+    0xfffffeff, 0xffc0dfff, 0xffd3d2ff, 0xffe8c8ff, 0xfffbc2ff, 0xfffec4ea, 0xfffeccc5, 0xfff7d8a5,
+    0xffe4e594, 0xffcfef96, 0xffbdf4ab, 0xffb3f3cc, 0xffb5ebf2, 0xffb8b8b8, 0xff000000, 0xff000000,
+};
+
+// 2. Sony CXA (Mais vibrante/quente)
+static const uint32_t palette_sony[64] = {
+    0xff585858, 0xff00238c, 0xff00139b, 0xff2d0585, 0xff5d0052, 0xff7a0017, 0xff7a0800, 0xff5f1800,
+    0xff352a00, 0xff093900, 0xff003f00, 0xff003c00, 0xff003234, 0xff000000, 0xff000000, 0xff000000,
+    0xffa4a4a4, 0xff1850c8, 0xff2d3ad8, 0xff6025c0, 0xff9b128a, 0xffbe103f, 0xffbe2300, 0xff9c3e00,
+    0xff665800, 0xff2e6a00, 0xff007200, 0xff006d07, 0xff005d5e, 0xff000000, 0xff000000, 0xff000000,
+    0xfffefefe, 0xff6094fe, 0xff7b7afe, 0xffb562fe, 0xfffe49d2, 0xfffe4675, 0xfffe5e23, 0xffda8000,
+    0xff9d9f00, 0xff5eb500, 0xff18c000, 0xff22ba46, 0xff16a4a9, 0xff3a3a3a, 0xff000000, 0xff000000,
+    0xfffefefe, 0xffbdd4fe, 0xffc9c9fe, 0xffe0c0fe, 0xfffeb4ee, 0xfffeb2ca, 0xfffebca9, 0xffefca97,
+    0xffd7d999, 0xffbfe29e, 0xffa4e7a6, 0xffa8e4c0, 0xffa2d9dc, 0xff989898, 0xff000000, 0xff000000
+};
+
+// 3. FCEUX (Cores clássicas de emulador)
+static const uint32_t palette_fceux[64] = {
+    0xff757575, 0xff271b8f, 0xff0000ab, 0xff47009f, 0xff8f0077, 0xffab0013, 0xffa70000, 0xff7f0b00,
+    0xff432f00, 0xff004700, 0xff005100, 0xff003f17, 0xff1b3f5f, 0xff000000, 0xff000000, 0xff000000,
+    0xffbcbcbc, 0xff0073ef, 0xff233bef, 0xff8300f3, 0xffbf00bf, 0xffe7005b, 0xffdb2b00, 0xffcb4f0f,
+    0xff8b7300, 0xff009700, 0xff00ab00, 0xff00933b, 0xff00838b, 0xff000000, 0xff000000, 0xff000000,
+    0xfff7f7f7, 0xff3fbfff, 0xff5f97ff, 0xffa78bfd, 0xfff77bff, 0xffff77b7, 0xffff7763, 0xffff9b3b,
+    0xfff3bf3f, 0xff83d313, 0xff4fdf4b, 0xff58f898, 0xff00ebdb, 0xff666666, 0xff000000, 0xff000000,
+    0xffffffff, 0xffabe7ff, 0xffc7d7ff, 0xffd7cbff, 0xffffc7ff, 0xffffc7db, 0xffffbfb3, 0xffffdbab,
+    0xffffe7a3, 0xffe3ffa3, 0xffabf3bf, 0xffb3ffcf, 0xff9ffff3, 0xffdddddd, 0xff000000, 0xff000000
+};
+
+static const uint32_t* all_palettes[] = {
+    palette_default,
+    palette_sony,
+    palette_fceux
+};
+
+void set_emulator_palette(PPU* ppu, int palette_index) {
+    if (palette_index < 0 || palette_index >= PALETTE_COUNT) return;
+    ppu->current_palette_index = palette_index;
+    // Converte ARGB para ABGR ou o formato usado pela SDL
+    to_pixel_format(all_palettes[palette_index], nes_palette, 64, SDL_PIXELFORMAT_ABGR8888);
+}
+
 void init_ppu(struct Emulator* emulator){
-    to_pixel_format(nes_palette_raw, nes_palette, 64, SDL_PIXELFORMAT_ABGR8888);
     PPU* ppu = &emulator->ppu;
+    
+    // Inicializa com a paleta padrão (0)
+    set_emulator_palette(ppu, PALETTE_DEFAULT);
+    
 #if NAMETABLE_MODE
     screen_size = sizeof(uint32_t) * VISIBLE_SCANLINES * VISIBLE_DOTS * 4;
 #else
