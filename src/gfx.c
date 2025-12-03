@@ -1,5 +1,5 @@
 #include <SDL.h>
-#include <stdio.h> // Necessário para snprintf
+#include <stdio.h>
 
 #include "gfx.h"
 #include "utils.h"
@@ -9,8 +9,10 @@
 #include "touchpad.h"
 #endif
 
-// Declaração da função interna para desenhar FPS
+int video_filter_mode = 0; // 0 = Normal, 1 = Scanlines
+
 static void render_fps_text(GraphicsContext* ctx, float fps);
+static void render_scanlines(GraphicsContext* g_ctx);
 
 void get_graphics_context(GraphicsContext* ctx){
 
@@ -106,12 +108,20 @@ void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps){
     SDL_UpdateTexture(g_ctx->texture, NULL, buffer, (int)(g_ctx->width * sizeof(uint32_t)));
 #ifdef __ANDROID__
     SDL_RenderTexture(g_ctx->renderer, g_ctx->texture, NULL, &g_ctx->dest);
+    
+    // Aplica o filtro de scanlines se ativado
+    if(video_filter_mode == 1) {
+        render_scanlines(g_ctx);
+    }
+
     ANDROID_RENDER_TOUCH_CONTROLS(g_ctx);
 #else
     SDL_RenderTexture(g_ctx->renderer, g_ctx->texture, NULL, NULL);
+    if(video_filter_mode == 1) {
+        // Implementar logica desktop se necessário
+    }
 #endif
 
-    // Renderizar o FPS se for válido (>= 0)
     if (fps >= 0.0f) {
         render_fps_text(g_ctx, fps);
     }
@@ -120,19 +130,35 @@ void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps){
     SDL_RenderPresent(g_ctx->renderer);
 }
 
+static void render_scanlines(GraphicsContext* g_ctx) {
+    // Define cor preta semi-transparente
+    SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 80); // Alpha 80/255
+
+    int start_y = (int)g_ctx->dest.y;
+    int end_y = start_y + (int)g_ctx->dest.h;
+    int width = (int)g_ctx->dest.w;
+    int start_x = (int)g_ctx->dest.x;
+
+    // Desenha uma linha a cada 2 pixels (emulando CRT)
+    for (int y = start_y; y < end_y; y += 2) {
+        SDL_RenderLine(g_ctx->renderer, start_x, y, start_x + width, y);
+    }
+    
+    SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_NONE);
+}
+
 static void render_fps_text(GraphicsContext* ctx, float fps) {
     if (!ctx->font) return;
 
     char fps_str[32];
     snprintf(fps_str, sizeof(fps_str), "FPS: %.1f", fps);
 
-    SDL_Color color = {0, 255, 0, 255}; // Verde
-    // Correção: Adicionado o argumento 0 (length) para SDL3_ttf
+    SDL_Color color = {0, 255, 0, 255};
     SDL_Surface* surface = TTF_RenderText_Solid(ctx->font, fps_str, 0, color);
     if (surface) {
         SDL_Texture* texture = SDL_CreateTextureFromSurface(ctx->renderer, surface);
         if (texture) {
-            // Desenhar no canto superior esquerdo com uma pequena margem
             SDL_FRect dest = {10.0f, 10.0f, (float)surface->w, (float)surface->h}; 
             SDL_RenderTexture(ctx->renderer, texture, NULL, &dest);
             SDL_DestroyTexture(texture);
