@@ -87,9 +87,40 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == 42 && resultCode == RESULT_OK) {
-            // launch ROM
-            Toast.makeText(this, "Not implemented", Toast.LENGTH_SHORT).show();
+        if (requestCode == 42 && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) {
+                try {
+                    String fileName = "game.nes";
+                    try (android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+                        if (cursor != null && cursor.moveToFirst()) {
+                            int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                            if (nameIndex != -1) {
+                                fileName = cursor.getString(nameIndex);
+                            }
+                        }
+                    }
+
+                    File cacheFile = new File(getCacheDir(), fileName);
+                    try (java.io.InputStream inputStream = getContentResolver().openInputStream(uri);
+                         java.io.FileOutputStream outputStream = new java.io.FileOutputStream(cacheFile)) {
+                        byte[] buffer = new byte[4096];
+                        int length;
+                        while ((length = inputStream.read(buffer)) > 0) {
+                            outputStream.write(buffer, 0, length);
+                        }
+                    }
+
+                    String filePath = cacheFile.getAbsolutePath();
+                    Intent intent = new Intent(this, EmulatorActivity.class);
+                    intent.putExtra("rom", filePath);
+                    startActivity(intent);
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to copy file", e);
+                    Toast.makeText(this, "Failed to load ROM", Toast.LENGTH_SHORT).show();
+                }
+            }
         }
     }
 
@@ -132,4 +163,4 @@ public class MainActivity extends AppCompatActivity {
         }
         adapter.filterList(filteredList);
     }
-}
+                }
