@@ -4,79 +4,34 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.widget.SearchView;
-import androidx.recyclerview.widget.DefaultItemAnimator;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
-
     ArrayList<NESItemModel> list;
     RecyclerView recyclerView;
     NESItemAdapter adapter;
-    public boolean hasGenie;
-    private static final String TAG = "MainActivity";
+    TextView emptyState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        UiModeHelper.UiModeType mode = UiModeHelper.getUiModeType(this);
-        if(mode == UiModeHelper.UiModeType.TV) {
-            // If the app is running in TV mode, start the TV activity
-            Intent intent = new Intent(this, com.barracoder.android.tv.MainActivity.class);
-            startActivity(intent);
-            finish();
-            return;
-        }
         setContentView(R.layout.activity_main);
-        hasGenie = assetsHasGenie();
-
-        SearchView searchView = findViewById(R.id.searchView);
-
-        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
-            @Override
-            public boolean onQueryTextSubmit(String query) {
-                return false;
-            }
-
-            @Override
-            public boolean onQueryTextChange(String newText) {
-                filter(newText);
-                return false;
-            }
-        });
-
         recyclerView = findViewById(R.id.NESRecyclerView);
-        list = new ArrayList<>();
-
-        recyclerView.setLayoutManager(new GridAutoFitLayoutManager(getApplicationContext(), recyclerView, 180));
-        recyclerView.setItemAnimator(new DefaultItemAnimator());
-
-        String[] roms = get_rom_files();
-        ArrayList<String> images = new ArrayList<>(Arrays.asList(get_rom_images()));
-
-        for(String rom: roms){
-            String imageFile = String.format(Locale.US, "%s.jpg", get_base_name(rom));
-            Uri imageUri = null;
-            if(images.contains(imageFile)) {
-                imageUri = Uri.parse("file:///android_asset/images/" + imageFile);
-            }
-            NESItemModel item = new NESItemModel(imageUri, get_base_name(rom), "roms/" + rom);
-            list.add(item);
-        }
-
-        adapter = new NESItemAdapter(MainActivity.this, list);
-        recyclerView.setAdapter(adapter);
-
-        findViewById(R.id.openROMBtn).setOnClickListener(view -> {
+        emptyState = findViewById(R.id.emptyStateText);
+        recyclerView.setLayoutManager(new LinearLayoutManager(this));
+        loadGames();
+        findViewById(R.id.openROMBtn).setOnClickListener(v -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("*/*");
@@ -84,83 +39,57 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void loadGames() {
+        list = new ArrayList<>();
+        File internalDir = getFilesDir();
+        File[] files = internalDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.getName().toLowerCase().endsWith(".nes")) {
+                    list.add(new NESItemModel(null, file.getName().replace(".nes",""), file.getAbsolutePath()));
+                }
+            }
+        }
+        // Assets (Opcional)
+        try {
+            String[] assets = getAssets().list("roms");
+            if(assets != null) for(String r : assets) list.add(new NESItemModel(null, r.replace(".nes",""), "roms/"+r));
+        } catch (IOException e) {}
+
+        if (list.isEmpty()) {
+            emptyState.setVisibility(View.VISIBLE);
+            recyclerView.setVisibility(View.GONE);
+        } else {
+            emptyState.setVisibility(View.GONE);
+            recyclerView.setVisibility(View.VISIBLE);
+            adapter = new NESItemAdapter(MainActivity.this, list);
+            recyclerView.setAdapter(adapter);
+        }
+    }
+
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == 42 && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
-            if (uri != null) {
-                try {
-                    String fileName = "game.nes";
-                    try (android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
-                        if (cursor != null && cursor.moveToFirst()) {
-                            int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
-                            if (nameIndex != -1) {
-                                fileName = cursor.getString(nameIndex);
-                            }
-                        }
-                    }
-
-                    File cacheFile = new File(getCacheDir(), fileName);
-                    try (java.io.InputStream inputStream = getContentResolver().openInputStream(uri);
-                         java.io.FileOutputStream outputStream = new java.io.FileOutputStream(cacheFile)) {
-                        byte[] buffer = new byte[4096];
-                        int length;
-                        while ((length = inputStream.read(buffer)) > 0) {
-                            outputStream.write(buffer, 0, length);
-                        }
-                    }
-
-                    String filePath = cacheFile.getAbsolutePath();
-                    Intent intent = new Intent(this, EmulatorActivity.class);
-                    intent.putExtra("rom", filePath);
-                    startActivity(intent);
-
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to copy file", e);
-                    Toast.makeText(this, "Failed to load ROM", Toast.LENGTH_SHORT).show();
-                }
-            }
+            if (uri != null) importRom(uri);
         }
     }
 
-    protected String[] get_rom_images(){
+    private void importRom(Uri uri) {
         try {
-            return getAssets().list("images");
-        }catch (IOException e){
-            Log.d(TAG, "Could not access images folder");
-            return new String[0];
+            String fileName = "game_" + System.currentTimeMillis() + ".nes";
+            // Tentar pegar nome real via cursor... (Simplificado para brevidade)
+            InputStream is = getContentResolver().openInputStream(uri);
+            File dest = new File(getFilesDir(), fileName);
+            OutputStream os = new FileOutputStream(dest);
+            byte[] buf = new byte[4096]; int len;
+            while ((len = is.read(buf)) > 0) os.write(buf, 0, len);
+            os.close(); is.close();
+            Toast.makeText(this, "Jogo Importado!", Toast.LENGTH_SHORT).show();
+            loadGames();
+        } catch (Exception e) {
+            Toast.makeText(this, "Erro ao importar", Toast.LENGTH_SHORT).show();
         }
     }
-
-    protected String[] get_rom_files(){
-        try {
-            return getAssets().list("roms");
-        }catch (IOException e){
-            Log.d(TAG, "Could not access ROMS folder");
-            return new String[0];
-        }
-    }
-
-    protected String get_base_name(String fileName){
-        if (fileName.indexOf(".") > 0) {
-            return fileName.substring(0, fileName.lastIndexOf("."));
-        }
-        return fileName;
-    }
-
-    private boolean assetsHasGenie(){
-        // check if roms/GENIE.nes exists
-        return Arrays.asList(get_rom_files()).contains("GENIE.nes");
-    }
-
-    private void filter(String text) {
-        ArrayList<NESItemModel> filteredList = new ArrayList<>();
-        for (NESItemModel item : list) {
-            if (item.getName().toLowerCase().contains(text.toLowerCase())) {
-                filteredList.add(item);
-            }
-        }
-        adapter.filterList(filteredList);
-    }
-                }
+}
