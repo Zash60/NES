@@ -1,5 +1,6 @@
 #include "mapper.h"
 #include "utils.h"
+#include <stdlib.h>
 
 static uint8_t read_PRG(Mapper*, uint16_t);
 static void write_PRG(Mapper*, uint16_t, uint8_t);
