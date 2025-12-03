@@ -23,4 +23,5 @@ void free_graphics(GraphicsContext* ctx);
 
 void get_graphics_context(GraphicsContext* ctx);
 
-void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer);
+// Atualizado para receber o FPS
+void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps);
