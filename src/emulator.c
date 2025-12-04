@@ -15,18 +15,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h> // Necessário para listar arquivos
 
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
-// --- Configurações ---
 #define SAVE_LOAD_COOLDOWN 1000
 #define SAVE_MAGIC 0x4E45535C 
 #define SAVE_VERSION 3
 
 static uint32_t last_state_action_time = 0;
 
-// --- Menu ---
 typedef struct {
     char label[32];
     SDL_Rect rect;
@@ -39,6 +38,9 @@ MenuOption menu_options[MENU_COUNT];
 // Forward declarations
 void toggle_edit_mode();
 uint8_t is_edit_mode();
+void refresh_script_list(Emulator* emu);
+void render_script_selector_ui(Emulator* emu);
+void handle_script_selector_input(Emulator* emu, int x, int y);
 
 // --- FUNÇÃO PARA CRIAR SCRIPT PADRÃO ---
 void create_default_script(Emulator* emu) {
@@ -46,7 +48,7 @@ void create_default_script(Emulator* emu) {
     if (!base_path) return;
 
     char full_path[1024];
-    snprintf(full_path, 1024, "%shitbox.lua", base_path);
+    snprintf(full_path, 1024, "%sexample.lua", base_path);
 
     FILE* f = fopen(full_path, "r");
     if (f) {
@@ -54,28 +56,19 @@ void create_default_script(Emulator* emu) {
     } else {
         f = fopen(full_path, "w");
         if (f) {
-            fprintf(f, "-- Exemplo de Script Lua para AndroNES\n");
-            fprintf(f, "-- Desenha uma caixa ao redor do Mario (Super Mario Bros)\n");
+            fprintf(f, "-- Exemplo de Script Lua\n");
             fprintf(f, "while true do\n");
-            fprintf(f, "    -- 0x0086 = Posicao X, 0x00CE = Posicao Y (na memoria RAM)\n");
-            fprintf(f, "    local x = memory.readbyte(0x0086)\n");
-            fprintf(f, "    local y = memory.readbyte(0x00CE)\n");
-            fprintf(f, "    \n");
-            fprintf(f, "    if x > 0 and y > 0 then\n");
-            fprintf(f, "        gui.drawbox(x, y, x+16, y+24, \"green\")\n");
-            fprintf(f, "        gui.text(x, y-10, \"Mario\")\n");
-            fprintf(f, "    end\n");
-            fprintf(f, "    \n");
+            fprintf(f, "    gui.text(10, 10, \"Hello Lua!\")\n");
+            fprintf(f, "    gui.drawbox(50, 50, 100, 100, \"red\")\n");
             fprintf(f, "    FCEU.frameadvance()\n");
             fprintf(f, "end\n");
             fclose(f);
-            LOG(INFO, "Default Lua script created at: %s", full_path);
         }
     }
     SDL_free(base_path);
 }
 
-// --- TAS IMPLEMENTATION ---
+// --- TAS & SCRIPT SELECTOR IMPLEMENTATION ---
 
 void tas_init(Emulator* emu) {
     emu->movie.frames = (FrameInput*)calloc(MAX_MOVIE_FRAMES, sizeof(FrameInput));
@@ -91,8 +84,139 @@ void tas_init(Emulator* emu) {
     emu->step_frame = 0;
     emu->slow_motion_factor = 1.0f;
     emu->lua_script_active = 0;
+    emu->show_script_selector = 0;
+    emu->script_count = 0;
     
     lua_bridge_init(emu);
+}
+
+// Lista arquivos .lua no diretório de dados do app
+void refresh_script_list(Emulator* emu) {
+    emu->script_count = 0;
+    char* base_path = SDL_GetPrefPath("Barracoder", "AndroNES");
+    if (!base_path) return;
+
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(base_path);
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            // Filtra apenas arquivos .lua
+            if (strstr(dir->d_name, ".lua") != NULL) {
+                strncpy(emu->script_list[emu->script_count], dir->d_name, MAX_FILENAME_LEN - 1);
+                emu->script_list[emu->script_count][MAX_FILENAME_LEN - 1] = '\0';
+                emu->script_count++;
+                if (emu->script_count >= MAX_SCRIPTS) break;
+            }
+        }
+        closedir(d);
+    }
+    SDL_free(base_path);
+    LOG(INFO, "Found %d scripts", emu->script_count);
+}
+
+// Desenha o menu de seleção de Scripts
+void render_script_selector_ui(Emulator* emu) {
+    GraphicsContext* g = &emu->g_ctx;
+    int w = g->screen_width;
+    int h = g->screen_height;
+    
+    // Fundo semi-transparente
+    SDL_SetRenderDrawBlendMode(g->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g->renderer, 20, 20, 30, 240);
+    SDL_FRect bg = {w * 0.1f, h * 0.1f, w * 0.8f, h * 0.8f};
+    SDL_RenderFillRect(g->renderer, &bg);
+
+    // Título
+    SDL_Color titleColor = {255, 255, 0, 255};
+    SDL_Surface* surf = TTF_RenderText_Solid(g->font, "Select Lua Script", 0, titleColor);
+    if (surf) {
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
+        SDL_FRect dst = {bg.x + 20, bg.y + 20, (float)surf->w, (float)surf->h};
+        SDL_RenderTexture(g->renderer, tex, NULL, &dst);
+        SDL_DestroyTexture(tex);
+        SDL_DestroySurface(surf);
+    }
+
+    // Lista de Arquivos
+    SDL_Color txtColor = {255, 255, 255, 255};
+    float start_y = bg.y + 80;
+    float item_h = 60.0f; // Altura da linha
+
+    for (int i = 0; i < emu->script_count; i++) {
+        // Texto do arquivo
+        surf = TTF_RenderText_Solid(g->font, emu->script_list[i], 0, txtColor);
+        if (surf) {
+            // Botão de fundo para clique
+            SDL_SetRenderDrawColor(g->renderer, 50, 50, 70, 200);
+            SDL_FRect btnRect = {bg.x + 20, start_y + (i * item_h), bg.w - 40, item_h - 5};
+            SDL_RenderFillRect(g->renderer, &btnRect);
+
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
+            SDL_FRect dst = {btnRect.x + 10, btnRect.y + 10, (float)surf->w, (float)surf->h};
+            SDL_RenderTexture(g->renderer, tex, NULL, &dst);
+            
+            SDL_DestroyTexture(tex);
+            SDL_DestroySurface(surf);
+        }
+    }
+
+    // Botão Cancelar/Parar Script
+    SDL_Color cancelColor = {255, 100, 100, 255};
+    surf = TTF_RenderText_Solid(g->font, "STOP SCRIPT / CANCEL", 0, cancelColor);
+    if (surf) {
+        SDL_SetRenderDrawColor(g->renderer, 80, 20, 20, 200);
+        SDL_FRect btnRect = {bg.x + 20, bg.y + bg.h - 70, bg.w - 40, 50};
+        SDL_RenderFillRect(g->renderer, &btnRect);
+
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
+        SDL_FRect dst = {btnRect.x + (btnRect.w - surf->w)/2, btnRect.y + 10, (float)surf->w, (float)surf->h};
+        SDL_RenderTexture(g->renderer, tex, NULL, &dst);
+        SDL_DestroyTexture(tex);
+        SDL_DestroySurface(surf);
+    }
+
+    SDL_SetRenderDrawBlendMode(g->renderer, SDL_BLENDMODE_NONE);
+}
+
+// Trata cliques no seletor
+void handle_script_selector_input(Emulator* emu, int x, int y) {
+    GraphicsContext* g = &emu->g_ctx;
+    int w = g->screen_width;
+    int h = g->screen_height;
+    float bg_y = h * 0.1f;
+    float start_y = bg_y + 80;
+    float item_h = 60.0f;
+
+    // Verifica clique nos arquivos
+    for (int i = 0; i < emu->script_count; i++) {
+        float btn_y = start_y + (i * item_h);
+        if (x > w * 0.1f && x < w * 0.9f && y > btn_y && y < btn_y + item_h - 5) {
+            // Carrega o script selecionado
+            lua_bridge_load_script(emu, emu->script_list[i]);
+            emu->lua_script_active = 1;
+            emu->show_script_selector = 0; // Fecha o menu
+            LOG(INFO, "Selected script: %s", emu->script_list[i]);
+            return;
+        }
+    }
+
+    // Verifica clique no botão Cancelar/Parar
+    float cancel_y = bg_y + (h * 0.8f) - 70;
+    if (x > w * 0.1f && x < w * 0.9f && y > cancel_y && y < cancel_y + 50) {
+        emu->lua_script_active = 0; // Para qualquer script
+        emu->show_script_selector = 0; // Fecha o menu
+        LOG(INFO, "Script stopped/cancelled");
+    }
+}
+
+void tas_open_script_selector(Emulator* emu) {
+    if (emu->show_script_selector) {
+        emu->show_script_selector = 0;
+    } else {
+        refresh_script_list(emu);
+        emu->show_script_selector = 1;
+    }
 }
 
 void tas_save_movie(Emulator* emu, const char* filename) {
@@ -188,17 +312,6 @@ void tas_toggle_slow_motion(Emulator* emu) {
 void tas_step_frame(Emulator* emu) {
     emu->step_frame = 1;
     emu->pause = 0; 
-}
-
-void tas_toggle_lua_script(Emulator* emu) {
-    if (emu->lua_script_active) {
-        emu->lua_script_active = 0;
-        LOG(INFO, "TAS: Lua Script Stopped");
-    } else {
-        lua_bridge_load_script(emu, "hitbox.lua");
-        emu->lua_script_active = 1;
-        LOG(INFO, "TAS: Lua Script Loaded (hitbox.lua)");
-    }
 }
 
 // --- Save/Load State Logic ---
@@ -347,7 +460,8 @@ void init_menu_layout(int screen_w, int screen_h) {
 
 void render_pause_menu(GraphicsContext* g_ctx) {
 #ifdef __ANDROID__
-    if (is_tas_toolbar_open()) return; 
+    // Não desenha o menu principal se o seletor de scripts ou a toolbar estiverem abertos
+    // Como o seletor de scripts é um estado "pausado especial", tratamos abaixo
 #endif
 
     SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_BLEND);
@@ -382,7 +496,7 @@ void render_pause_menu(GraphicsContext* g_ctx) {
 
 void handle_menu_touch(int x, int y, Emulator* emu) {
 #ifdef __ANDROID__
-    if (is_tas_toolbar_open()) return;
+    if (is_tas_toolbar_open() || emu->show_script_selector) return;
 #endif
 
     for(int i=0; i<MENU_COUNT; i++) {
@@ -459,7 +573,13 @@ void run_emulator(struct Emulator* emulator){
         mark_start(tm);
         
         while (SDL_PollEvent(&e)) {
-            if(emulator->pause && e.type == SDL_EVENT_FINGER_DOWN) {
+            // Verifica se o toque é para o Seletor de Scripts
+            if(emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
+                handle_script_selector_input(emulator, (int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height));
+                continue; // Não processa mais nada
+            }
+
+            if(emulator->pause && !emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_menu_touch((int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height), emulator);
             }
             
@@ -469,7 +589,11 @@ void run_emulator(struct Emulator* emulator){
             }
             
             if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) emulator->exit = 1;
-            if(e.type == SDL_EVENT_KEY_DOWN && (e.key.key == SDLK_AC_BACK || e.key.scancode == SDL_SCANCODE_AC_BACK)) emulator->pause = !emulator->pause;
+            if(e.type == SDL_EVENT_KEY_DOWN && (e.key.key == SDLK_AC_BACK || e.key.scancode == SDL_SCANCODE_AC_BACK)) {
+                // Se seletor aberto, fechar
+                if(emulator->show_script_selector) emulator->show_script_selector = 0;
+                else emulator->pause = !emulator->pause;
+            }
 
             if(e.type == SDL_EVENT_KEY_DOWN) {
                 switch(e.key.key) {
@@ -478,7 +602,7 @@ void run_emulator(struct Emulator* emulator){
                     case SDLK_F5: tas_toggle_recording(emulator); break;
                     case SDLK_F6: tas_toggle_playback(emulator); break;
                     case SDLK_F7: tas_toggle_slow_motion(emulator); break;
-                    case SDLK_F8: tas_toggle_lua_script(emulator); break;
+                    case SDLK_F8: tas_open_script_selector(emulator); break;
                     case SDLK_P:  tas_step_frame(emulator); break;
                 }
             }
@@ -488,7 +612,8 @@ void run_emulator(struct Emulator* emulator){
             turbo_trigger(j1); turbo_trigger(j2); 
         }
 
-        if(!emulator->pause || emulator->step_frame){
+        // Executa se: Não pausado, OU frame step, E (Seletor fechado)
+        if((!emulator->pause || emulator->step_frame) && !emulator->show_script_selector){
             
             if (emulator->is_recording) {
                 if (emulator->current_frame_index < MAX_MOVIE_FRAMES) {
@@ -548,12 +673,21 @@ void run_emulator(struct Emulator* emulator){
             }
 
         } else {
+            // Modo Pausa / Seletor
             render_frame_only(g);
-            if(emulator->lua_script_active) lua_bridge_render(emulator, g);
-            render_pause_menu(g); 
+            
+            if(emulator->show_script_selector) {
+                render_script_selector_ui(emulator); // Desenha o seletor por cima
+            } else {
+                if(emulator->lua_script_active) lua_bridge_render(emulator, g);
+                // Só desenha menu principal se toolbar TAS fechada
+                if (!is_tas_toolbar_open()) render_pause_menu(g);
+            }
+            
             #ifdef __ANDROID__
             ANDROID_RENDER_TOUCH_CONTROLS(g);
             #endif
+            
             SDL_RenderPresent(g->renderer);
             SDL_Delay(30);
         }
@@ -561,20 +695,10 @@ void run_emulator(struct Emulator* emulator){
     release_timer(&ft); release_timer(tm);
 }
 
-// IMPLEMENTAÇÃO DA FUNÇÃO reset_emulator
 void reset_emulator(Emulator* emulator) {
-    if(emulator->g_ctx.is_tv) { 
-        emulator->exit=1; 
-        return; 
-    }
-    
-    reset_cpu(&emulator->cpu); 
-    reset_APU(&emulator->apu); 
-    reset_ppu(&emulator->ppu);
-    
-    if(emulator->mapper.reset) {
-        emulator->mapper.reset(&emulator->mapper);
-    }
+    if(emulator->g_ctx.is_tv) { emulator->exit=1; return; }
+    reset_cpu(&emulator->cpu); reset_APU(&emulator->apu); reset_ppu(&emulator->ppu);
+    if(emulator->mapper.reset) emulator->mapper.reset(&emulator->mapper);
 }
 
 void free_emulator(struct Emulator* emulator){
