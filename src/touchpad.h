@@ -32,19 +32,32 @@ typedef struct TouchButton{
     SDL_FingerID finger;
 } TouchButton;
 
-// 6 Jogo + 1 Menu + 1 Save + 1 Load = 9 Botões
-#define TOUCH_BUTTON_COUNT 9
+// 6 Jogo + 3 Sistema + 6 TAS = 15 Botões
+#define TOUCH_BUTTON_COUNT 15
 
-// IDs Especiais
+// IDs Especiais de Sistema
 #define BTN_ID_MENU 0x30000
 #define BTN_ID_SAVE 0x10000
 #define BTN_ID_LOAD 0x20000
 
+// IDs Especiais de TAS
+#define BTN_ID_TAS_TOGGLE 0x40000
+#define BTN_ID_TAS_REC    0x40001
+#define BTN_ID_TAS_PLAY   0x40002
+#define BTN_ID_TAS_SLOW   0x40003
+#define BTN_ID_TAS_STEP   0x40004
+#define BTN_ID_TAS_BOX    0x40005
+
 typedef struct TouchPad{
     uint16_t status;
-    // Mapeamento direto para facilitar acesso
+    
+    // Botões mapeados
     TouchButton A, turboA, B, turboB, select, start;
     TouchButton menu, save, load;
+    
+    // Botões TAS
+    TouchButton tas_toggle, tas_rec, tas_play, tas_slow, tas_step, tas_box;
+    uint8_t show_tas_toolbar; // Flag para mostrar/esconder a barra TAS
     
     TouchButton* buttons[TOUCH_BUTTON_COUNT];
     TouchAxis axis;
