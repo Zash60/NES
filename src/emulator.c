@@ -75,10 +75,13 @@ void save_state(Emulator* emulator, const char* filename_unused) {
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
 
+    // Congela visualmente (opcional, desenha frame atual)
+    // Como o I/O é bloqueante, o jogo congela naturalmente, mas logs ajudam debug
+    LOG(INFO, "Freezing game for Save State...");
+
     char full_path[1024];
     get_save_filename(emulator, full_path, sizeof(full_path));
-    LOG(INFO, "Saving Slot %d to: %s", emulator->current_save_slot, full_path);
-
+    
     FILE* f = fopen(full_path, "wb");
     if (!f) { LOG(ERROR, "Save Failed: Could not open file"); return; }
 
@@ -119,6 +122,13 @@ void load_state(Emulator* emulator, const char* filename_unused) {
     uint32_t now = SDL_GetTicks();
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
+
+    // --- CONGELAMENTO ---
+    // 1. Limpar Audio Stream para evitar "glitch" ou som repetido do estado anterior
+    SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    
+    // 2. Pequeno delay para garantir que ciclos de hardware pendentes terminem
+    SDL_Delay(20);
 
     char full_path[1024];
     get_save_filename(emulator, full_path, sizeof(full_path));
@@ -167,7 +177,7 @@ void load_state(Emulator* emulator, const char* filename_unused) {
         emulator->ppu.w = ppu_snap.w;
     }
 
-    // Força refresh visual
+    // Força flag de renderização para desenhar o novo frame imediatamente no loop principal
     emulator->ppu.render = 1;
 
     fclose(f);
