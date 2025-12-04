@@ -11,29 +11,39 @@
 
 #include <SDL.h> 
 #include <SDL_ttf.h>
+#include <stdio.h>
 
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
-// Cooldown para evitar travamentos ao salvar/carregar muito rápido
+// Configurações de Save State
 #define SAVE_LOAD_COOLDOWN 1000
+#define SAVE_MAGIC 0x4E45535A // "NESZ" em Hex
+#define SAVE_VERSION 1
+
 static uint32_t last_state_action_time = 0;
 
 // --- Estruturas do Menu ---
 typedef struct {
     char label[32];
     SDL_Rect rect;
-    int action_code; // 0=Resume, 1=Save, 2=Load, 3=Edit, 4=Filter, 5=Palette, 6=Exit
+    int action_code; // 0=Resume, 1=Slot, 2=Save, 3=Load, 4=Edit, 5=Filter, 6=Palette, 7=Exit
 } MenuOption;
 
-#define MENU_COUNT 7
+#define MENU_COUNT 8
 MenuOption menu_options[MENU_COUNT];
 
 // --- Declarações Forward ---
-void toggle_edit_mode(); // Definido em touchpad.c
-uint8_t is_edit_mode();  // Definido em touchpad.c
+void toggle_edit_mode(); // Do touchpad.c
+uint8_t is_edit_mode();  // Do touchpad.c
 
 // --- Estruturas para Serialização (Save State) ---
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t padding;
+} SaveHeader;
+
 typedef struct {
     uint16_t pc;
     uint8_t ac, x, y, sr, sp;
@@ -49,43 +59,44 @@ typedef struct {
     uint8_t x, w;
 } PPUSnapshot;
 
-// Função auxiliar para obter caminho gravável no Android
-static void get_full_save_path(const char* filename, char* buffer, size_t size) {
+// Gera o nome do arquivo: /data/.../NomeJogo_slotX.save
+static void get_save_filename(Emulator* emu, char* buffer, size_t size) {
     char* base_path = SDL_GetPrefPath("Barracoder", "AndroNES");
     if (base_path) {
-        snprintf(buffer, size, "%s%s", base_path, filename);
+        snprintf(buffer, size, "%s%s_slot%d.save", base_path, emu->rom_name, emu->current_save_slot);
         SDL_free(base_path);
     } else {
-        snprintf(buffer, size, "%s", filename);
+        snprintf(buffer, size, "%s_slot%d.save", emu->rom_name, emu->current_save_slot);
     }
 }
 
-void save_state(Emulator* emulator, const char* filename) {
+void save_state(Emulator* emulator, const char* filename_unused) {
     uint32_t now = SDL_GetTicks();
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
 
     char full_path[1024];
-    get_full_save_path(filename, full_path, sizeof(full_path));
-    LOG(INFO, "Saving state to: %s", full_path);
+    get_save_filename(emulator, full_path, sizeof(full_path));
+    LOG(INFO, "Saving Slot %d to: %s", emulator->current_save_slot, full_path);
 
     FILE* f = fopen(full_path, "wb");
-    if (!f) {
-        LOG(ERROR, "Failed to open file for saving");
-        return;
-    }
+    if (!f) { LOG(ERROR, "Save Failed: Could not open file"); return; }
 
-    // 1. Salvar CPU
+    // 1. Header
+    SaveHeader header = { .magic = SAVE_MAGIC, .version = SAVE_VERSION, .padding = 0 };
+    fwrite(&header, sizeof(SaveHeader), 1, f);
+
+    // 2. CPU
     CPUSnapshot cpu_snap = {
         .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x,
         .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp
     };
     fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
 
-    // 2. Salvar RAM
+    // 3. RAM
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
 
-    // 3. Salvar PPU
+    // 4. PPU
     PPUSnapshot ppu_snap;
     memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, sizeof(ppu_snap.V_RAM));
     memcpy(ppu_snap.OAM, emulator->ppu.OAM, sizeof(ppu_snap.OAM));
@@ -99,27 +110,34 @@ void save_state(Emulator* emulator, const char* filename) {
     ppu_snap.x = emulator->ppu.x;
     ppu_snap.w = emulator->ppu.w;
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
-    
+
     fclose(f);
-    LOG(INFO, "State saved successfully!");
+    LOG(INFO, "State Saved Successfully!");
 }
 
-void load_state(Emulator* emulator, const char* filename) {
+void load_state(Emulator* emulator, const char* filename_unused) {
     uint32_t now = SDL_GetTicks();
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
 
     char full_path[1024];
-    get_full_save_path(filename, full_path, sizeof(full_path));
-    LOG(INFO, "Loading state from: %s", full_path);
+    get_save_filename(emulator, full_path, sizeof(full_path));
+    LOG(INFO, "Loading Slot %d from: %s", emulator->current_save_slot, full_path);
 
     FILE* f = fopen(full_path, "rb");
-    if (!f) {
-        LOG(ERROR, "Failed to open file for loading");
+    if (!f) { LOG(ERROR, "Load Failed: File not found"); return; }
+
+    // 1. Validar Header
+    SaveHeader header;
+    if (fread(&header, sizeof(SaveHeader), 1, f) != 1) { fclose(f); return; }
+
+    if (header.magic != SAVE_MAGIC) {
+        LOG(ERROR, "Load Failed: Invalid file format");
+        fclose(f);
         return;
     }
 
-    // 1. Carregar CPU
+    // 2. CPU
     CPUSnapshot cpu_snap;
     if (fread(&cpu_snap, sizeof(CPUSnapshot), 1, f) == 1) {
         emulator->cpu.pc = cpu_snap.pc;
@@ -130,10 +148,10 @@ void load_state(Emulator* emulator, const char* filename) {
         emulator->cpu.sp = cpu_snap.sp;
     }
 
-    // 2. Carregar RAM
+    // 3. RAM
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
 
-    // 3. Carregar PPU
+    // 4. PPU
     PPUSnapshot ppu_snap;
     if (fread(&ppu_snap, sizeof(PPUSnapshot), 1, f) == 1) {
         memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, sizeof(ppu_snap.V_RAM));
@@ -149,21 +167,31 @@ void load_state(Emulator* emulator, const char* filename) {
         emulator->ppu.w = ppu_snap.w;
     }
 
+    // Força refresh visual
+    emulator->ppu.render = 1;
+
     fclose(f);
-    LOG(INFO, "State loaded successfully!");
+    LOG(INFO, "State Loaded Successfully!");
 }
 
-// --- Lógica do Menu ---
+void increment_save_slot(Emulator* emulator) {
+    emulator->current_save_slot++;
+    if(emulator->current_save_slot > 9) emulator->current_save_slot = 0;
+}
+
+// --- Menu Logic ---
 void init_menu_layout(int screen_w, int screen_h) {
-    int btn_w = screen_w * 0.4; // 40% da largura
-    int btn_h = screen_h * 0.1; // 10% da altura
-    if (btn_h < 50) btn_h = 50;
+    int btn_w = screen_w * 0.5; 
+    int btn_h = screen_h * 0.08; 
+    if (btn_h < 40) btn_h = 40;
     
     int start_y = (screen_h - (MENU_COUNT * (btn_h + 10))) / 2;
     int center_x = (screen_w - btn_w) / 2;
 
+    // Labels iniciais
     const char* labels[] = {
         "Resume", 
+        "Slot: 0",
         "Save State", 
         "Load State", 
         "Edit Controls", 
@@ -184,16 +212,15 @@ void init_menu_layout(int screen_w, int screen_h) {
 
 void render_pause_menu(GraphicsContext* g_ctx) {
     SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 200);
-    SDL_RenderFillRect(g_ctx->renderer, NULL); // Fundo escuro
+    SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 220);
+    SDL_RenderFillRect(g_ctx->renderer, NULL); // Fundo escuro tela cheia
 
     SDL_Color txt_color = {255, 255, 255, 255};
     SDL_Color btn_color = {60, 60, 60, 255};
     SDL_Color btn_active = {100, 60, 60, 255};
 
     for(int i=0; i<MENU_COUNT; i++) {
-        // Destacar botão se for "Edit Controls" e estiver ativo
-        if (i == 3 && is_edit_mode()) 
+        if (i == 4 && is_edit_mode()) 
             SDL_SetRenderDrawColor(g_ctx->renderer, btn_active.r, btn_active.g, btn_active.b, 255);
         else 
             SDL_SetRenderDrawColor(g_ctx->renderer, btn_color.r, btn_color.g, btn_color.b, 255);
@@ -204,9 +231,9 @@ void render_pause_menu(GraphicsContext* g_ctx) {
         };
         SDL_RenderFillRect(g_ctx->renderer, &frect);
 
-        // Labels dinâmicas
+        // Labels dinâmicas de status
         char* lbl = menu_options[i].label;
-        if (i == 4) lbl = video_filter_mode ? "Scanlines: ON" : "Scanlines: OFF";
+        if (i == 5) lbl = video_filter_mode ? "Scanlines: ON" : "Scanlines: OFF";
         
         SDL_Surface* surf = TTF_RenderText_Blended(g_ctx->font, lbl, 0, txt_color);
         if(surf){
@@ -232,30 +259,33 @@ void handle_menu_touch(int x, int y, Emulator* emu) {
                 case 0: // Resume
                     emu->pause = 0;
                     break;
-                case 1: // Save
-                    save_state(emu, "save.dat");
+                case 1: // Slot Change
+                    increment_save_slot(emu);
+                    snprintf(menu_options[i].label, 32, "Slot: %d", emu->current_save_slot);
+                    break;
+                case 2: // Save
+                    save_state(emu, NULL);
                     emu->pause = 0;
                     break;
-                case 2: // Load
-                    load_state(emu, "save.dat");
+                case 3: // Load
+                    load_state(emu, NULL);
                     emu->pause = 0;
                     break;
-                case 3: // Edit Controls
+                case 4: // Edit Controls
                     toggle_edit_mode();
                     if (is_edit_mode()) {
                         strncpy(menu_options[i].label, "Stop Editing", 32);
-                        emu->pause = 0; 
+                        emu->pause = 0; // Retorna ao jogo para mover botões
                     } else {
                         strncpy(menu_options[i].label, "Edit Controls", 32);
                     }
                     break;
-                case 4: // Filters
+                case 5: // Filters
                     video_filter_mode = !video_filter_mode;
                     break;
-                case 5: // Palette
+                case 6: // Palette
                     {
-                        // PALETTE_COUNT é 3 (definido no ppu.h)
-                        int next = (emu->ppu.current_palette_index + 1) % 3; 
+                        int next = (emu->ppu.current_palette_index + 1) % 3;
                         set_emulator_palette(&emu->ppu, next);
                         char* pname = "Default";
                         if (next == 1) pname = "Sony CXA";
@@ -263,11 +293,11 @@ void handle_menu_touch(int x, int y, Emulator* emu) {
                         snprintf(menu_options[i].label, 32, "Palette: %s", pname);
                     }
                     break;
-                case 6: // Exit
+                case 7: // Exit
                     emu->exit = 1;
                     break;
             }
-            SDL_Delay(200); // Debounce
+            SDL_Delay(200);
         }
     }
 }
@@ -283,6 +313,12 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
         genie = argv[argc - 1];
 
     memset(emulator, 0, sizeof(Emulator));
+    
+    // Extrai nome base da ROM para o save
+    char* filename = get_file_name(argv[1]);
+    strncpy(emulator->rom_name, filename, 255);
+    emulator->current_save_slot = 0;
+
     load_file(argv[1], genie, &emulator->mapper);
     emulator->type = emulator->mapper.type;
     emulator->mapper.emulator = emulator;
@@ -337,7 +373,6 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     init_APU(emulator);
     init_timer(&emulator->timer, PERIOD);
     
-    // Inicializa touchpad passando o emulador
     ANDROID_INIT_TOUCH_PAD(emulator);
     
     if (!g_ctx->is_tv) {
@@ -347,6 +382,7 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     emulator->exit = 0;
     emulator->pause = 0;
 }
+
 
 void run_emulator(struct Emulator* emulator){
     if(emulator->mapper.is_nsf) {
@@ -366,7 +402,6 @@ void run_emulator(struct Emulator* emulator){
     init_timer(&frame_timer, PERIOD);
     mark_start(&frame_timer);
 
-    // Variáveis para cálculo de FPS
     uint64_t frame_count = 0;
     uint64_t last_fps_time = SDL_GetTicks();
     float current_fps = 0.0f;
@@ -407,10 +442,10 @@ void run_emulator(struct Emulator* emulator){
                             reset_emulator(emulator);
                             break;
                         case SDLK_F6:
-                            save_state(emulator, "save.dat");
+                            save_state(emulator, NULL);
                             break;
                         case SDLK_F7:
-                            load_state(emulator, "save.dat");
+                            load_state(emulator, NULL);
                             break;
                         default:
                             break;
@@ -430,7 +465,6 @@ void run_emulator(struct Emulator* emulator){
             }
         }
 
-        // Turbo Events
         if(ppu->frames % TURBO_SKIP == 0) {
             turbo_trigger(joy1);
             turbo_trigger(joy2);
@@ -458,7 +492,6 @@ void run_emulator(struct Emulator* emulator){
 #if NAMETABLE_MODE
             render_name_tables(ppu, ppu->screen);
 #endif
-            // FPS Calc
             frame_count++;
             uint64_t current_time = SDL_GetTicks();
             if (current_time > last_fps_time + 1000) {
@@ -473,12 +506,10 @@ void run_emulator(struct Emulator* emulator){
             mark_end(timer);
             adjusted_wait(timer);
         }else{
-            // MODO PAUSA / MENU (Sem piscar)
-            // Renderiza o frame estático (sem updates do PPU) e o menu por cima
+            // MODO PAUSA: Renderiza frame estático e menu por cima
             render_frame_only(g_ctx);
             render_pause_menu(g_ctx);
             SDL_RenderPresent(g_ctx->renderer);
-            
             wait(IDLE_SLEEP);
         }
     }
@@ -503,7 +534,6 @@ void reset_emulator(Emulator* emulator) {
     }
 }
 
-// Loop completo para NSF Player
 void run_NSF_player(struct Emulator* emulator) {
     LOG(INFO, "Starting NSF player...");
     JoyPad* joy1 = &emulator->mem.joy1;
@@ -523,18 +553,14 @@ void run_NSF_player(struct Emulator* emulator) {
     size_t cycles_per_frame, nmi_cycle_start;
     if(emulator->type == PAL) {
         cycles_per_frame = emulator->mapper.NSF->speed * 1.662607f;
-        // PAL has 70 scanlines (7459 cpu cycles) V-blank
         nmi_cycle_start = cycles_per_frame - 7459;
     }else {
-        // NTSC and others have 20 scanlines (2273 cpu cycles) V-blank
         cycles_per_frame = emulator->mapper.NSF->speed * 1.789773f;
         nmi_cycle_start = cycles_per_frame - 2273;
     }
     uint8_t status1 = 0, status2 = 0;
 
-    // initialize for the first song
     init_song(emulator, nsf->current_song);
-
 
     while (!emulator->exit) {
         mark_start(timer);
@@ -556,42 +582,8 @@ void run_NSF_player(struct Emulator* emulator) {
                 init_song(emulator, nsf->current_song);
             }
 
-            switch (e.type) {
-                case SDL_EVENT_KEY_DOWN:
-                    switch (e.key.key) {
-                        case SDLK_ESCAPE:
-                            emulator->exit = 1;
-                            break;
-                        case SDLK_MEDIA_PLAY:
-                        case SDLK_SPACE:
-                            emulator->pause ^= 1;
-                            TOGGLE_TIMER_RESOLUTION();
-                            break;
-                        case SDLK_MEDIA_NEXT_TRACK:
-                            next_song(emulator, nsf);
-                            break;
-                        case SDLK_MEDIA_PREVIOUS_TRACK:
-                            prev_song(emulator, nsf);
-                            break;
-                        case SDLK_F5:
-                            reset_emulator(emulator);
-                            nsf->current_song = 1;
-                            init_song(emulator, nsf->current_song);
-                            break;
-                        default:
-                            break;
-                    }
-                    break;
-                case SDL_EVENT_QUIT:
-                    emulator->exit = 1;
-                    break;
-                default:
-                    if(e.key.key == SDLK_AC_BACK
-                        || e.key.scancode == SDL_SCANCODE_AC_BACK) {
-                        emulator->exit = 1;
-                        LOG(DEBUG, "Exiting emulator session");
-                    }
-            }
+            if(e.type == SDL_EVENT_QUIT) emulator->exit = 1;
+            if(e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_AC_BACK) emulator->exit = 1;
         }
 
         if(nsf->times != NULL && !nsf->initializing) {
@@ -600,10 +592,8 @@ void run_NSF_player(struct Emulator* emulator) {
                 if(nsf->tick_max < nsf->tick) {
                     next_song(emulator, nsf);
                 } else if(nsf->fade != NULL) {
-                    // fade
                     int fade_dur = nsf->fade[nsf->current_song == 0 ? 0 : nsf->current_song - 1];
                     apu->volume = (nsf->tick - track_dur) / (float)fade_dur;
-                    // clamp to range (0,1) then invert
                     apu->volume = 1 - (apu->volume < 0 ? 0 : apu->volume > 1 ? 1 : apu->volume);
                 }
             }
