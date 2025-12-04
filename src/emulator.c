@@ -169,8 +169,6 @@ void load_state(Emulator* emulator, const char* unused) {
     SDL_LockAudioStream(emulator->g_ctx.audio_stream);
     SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
     
-
-
     char full_path[1024];
     get_slot_filename(emulator, full_path, sizeof(full_path));
     LOG(INFO, "Loading from: %s", full_path);
@@ -256,9 +254,9 @@ void load_state(Emulator* emulator, const char* unused) {
     // Force Render Update
     emulator->ppu.render = 1;
 
-    // [FIX] Força um reset suave do emulador para sincronizar PPU/CPU
-    // Isso resolve problemas de travamento e artefatos visuais após o load state.
-    reset_emulator(emulator);
+    // [CORREÇÃO APLICADA]
+    // A chamada 'reset_emulator(emulator);' foi removida daqui.
+    // Ela estava apagando o estado carregado.
 
     fclose(f);
     
