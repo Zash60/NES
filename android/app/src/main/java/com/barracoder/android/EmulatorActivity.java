@@ -13,6 +13,10 @@ import android.view.WindowMetrics;
 
 import org.libsdl.app.SDLActivity;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.util.Arrays;
 
 public class EmulatorActivity extends SDLActivity {
@@ -26,7 +30,7 @@ public class EmulatorActivity extends SDLActivity {
         return new String[]{
                 "SDL3",
                 "SDL3_ttf",
-                "nes"
+                "nes" // Nome da lib corrigido conforme CMakeLists.txt
         };
     }
 
@@ -68,6 +72,10 @@ public class EmulatorActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState){
         super.onCreate(savedInstanceState);
+        
+        // 1. Cria o script Lua padrão para forçar a criação da pasta 'data'
+        createDefaultLuaScript();
+
         mEmulatorFile = getIntent().getStringExtra("rom");
         mGenie = getIntent().getBooleanExtra("genie", false);
         mIsTV = getIntent().getBooleanExtra("tv", false);
@@ -77,6 +85,45 @@ public class EmulatorActivity extends SDLActivity {
         mHeight = dimensions.second;
         Log.i(TAG, "size: " + mWidth + "x" + mHeight);
         Log.i(TAG, "IS TV: " + mIsTV);
+    }
+
+    // Função para criar o arquivo Lua e a pasta
+    private void createDefaultLuaScript() {
+        try {
+            // Isso acessa /Android/data/com.barracoder.android/files/
+            File dir = getExternalFilesDir(null); 
+            if (dir == null) return;
+
+            File scriptFile = new File(dir, "hitbox.lua");
+            
+            // Só cria se não existir
+            if (!scriptFile.exists()) {
+                Log.i(TAG, "Criando script padrao em: " + scriptFile.getAbsolutePath());
+                
+                FileOutputStream fos = new FileOutputStream(scriptFile);
+                OutputStreamWriter writer = new OutputStreamWriter(fos);
+                
+                writer.write("-- Exemplo de Script Lua para AndroNES\n");
+                writer.write("-- Desenha uma caixa ao redor do Mario (Super Mario Bros)\n");
+                writer.write("while true do\n");
+                writer.write("    -- 0x0086 = Posicao X, 0x00CE = Posicao Y (na memoria RAM)\n");
+                writer.write("    local x = memory.readbyte(0x0086)\n");
+                writer.write("    local y = memory.readbyte(0x00CE)\n");
+                writer.write("    \n");
+                writer.write("    if x > 0 and y > 0 then\n");
+                writer.write("        gui.drawbox(x, y, x+16, y+24, \"green\")\n");
+                writer.write("        gui.text(x, y-10, \"Mario\")\n");
+                writer.write("    end\n");
+                writer.write("    \n");
+                writer.write("    FCEU.frameadvance()\n");
+                writer.write("end\n");
+                
+                writer.close();
+                fos.close();
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Erro ao criar script Lua padrao", e);
+        }
     }
 
     @Override
