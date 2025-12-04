@@ -27,14 +27,24 @@
 #define MAX_SCRIPTS 32
 #define MAX_FILENAME_LEN 64
 
+// Modos de Filme TAS
+typedef enum {
+    MOVIE_MODE_INACTIVE,
+    MOVIE_MODE_PLAYBACK,
+    MOVIE_MODE_RECORDING,
+    MOVIE_MODE_FINISHED
+} TASMovieMode;
+
 typedef struct {
     uint16_t joy1_status;
     uint16_t joy2_status;
 } FrameInput;
 
 typedef struct {
-    uint32_t magic;
-    uint32_t frame_count;
+    uint64_t guid;              // Identificador único do filme
+    TASMovieMode mode;          // Modo atual (Inactive, Play, Record, Finished)
+    uint8_t read_only;          // Se o filme pode ser modificado ao carregar um estado
+    uint32_t frame_count;       // Comprimento total do filme
     FrameInput* frames; 
 } TASMovie;
 
@@ -62,13 +72,12 @@ typedef struct Emulator{
 
     // --- TAS FIELDS ---
     TASMovie movie;
-    uint32_t current_frame_index;
-    uint8_t is_recording;
-    uint8_t is_playing;
-    uint8_t step_frame;         
+    uint32_t current_frame_index; // "Cabeça de leitura/gravação" do filme
+    uint8_t needs_truncation;   // Flag para truncar o filme no próximo frame
+
     float slow_motion_factor;   
-    
     uint8_t lua_script_active; 
+    uint8_t step_frame;
 
     // --- SCRIPT SELECTOR FIELDS ---
     uint8_t show_script_selector;
@@ -90,10 +99,9 @@ void free_emulator(Emulator* emulator);
 
 // Funções TAS
 void tas_init(Emulator* emu);
-void tas_toggle_recording(Emulator* emu);
-void tas_toggle_playback(Emulator* emu);
+void tas_start_recording(Emulator* emu);
+void tas_stop_movie(Emulator* emu);
+void tas_start_playback(Emulator* emu, int read_only);
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
-void tas_open_script_selector(Emulator* emu); 
-void tas_save_movie(Emulator* emu, const char* filename);
-void tas_load_movie(Emulator* emu, const char* filename);
+void tas_open_script_selector(Emulator* emu);
