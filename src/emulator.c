@@ -25,7 +25,6 @@ static uint16_t TURBO_SKIP;
 #define SAVE_VERSION 3
 
 // Caminho hardcoded para garantir acesso à pasta visível no Android
-// Isso resolve o problema de "arquivos não aparecem"
 #ifdef __ANDROID__
     #define SCRIPT_PATH "/storage/emulated/0/Android/data/com.barracoder.android/files/"
 #else
@@ -49,10 +48,11 @@ uint8_t is_edit_mode();
 void refresh_script_list(Emulator* emu);
 void render_script_selector_ui(Emulator* emu);
 void handle_script_selector_input(Emulator* emu, int x, int y);
+// CORREÇÃO: Adicionado protótipo aqui
+void tas_load_script_absolute(Emulator* emu, const char* full_path);
 
 // --- FUNÇÃO PARA CRIAR SCRIPT PADRÃO ---
 void create_default_script(Emulator* emu) {
-    // Tenta criar na pasta externa primeiro
     char full_path[1024];
     snprintf(full_path, 1024, "%sexample_box.lua", SCRIPT_PATH);
 
@@ -60,7 +60,6 @@ void create_default_script(Emulator* emu) {
     if (f) {
         fclose(f);
     } else {
-        // Se a pasta não existir, tenta criar (embora o Java já deva ter feito isso)
         #ifdef _WIN32
         mkdir(SCRIPT_PATH);
         #else
@@ -111,7 +110,6 @@ void tas_init(Emulator* emu) {
     lua_bridge_init(emu);
 }
 
-// Lista arquivos .lua
 void refresh_script_list(Emulator* emu) {
     emu->script_count = 0;
     
@@ -122,7 +120,6 @@ void refresh_script_list(Emulator* emu) {
     d = opendir(SCRIPT_PATH);
     if (d) {
         while ((dir = readdir(d)) != NULL) {
-            // Filtra arquivos que terminam com .lua (case insensitive simples)
             size_t len = strlen(dir->d_name);
             if (len > 4 && 
                (dir->d_name[len-1] == 'a' || dir->d_name[len-1] == 'A') &&
@@ -142,7 +139,6 @@ void refresh_script_list(Emulator* emu) {
         closedir(d);
     } else {
         LOG(ERROR, "Could not open script directory: %s", SCRIPT_PATH);
-        // Tenta fallback para SDL Pref Path se o hardcoded falhar
         char* pref_path = SDL_GetPrefPath("Barracoder", "AndroNES");
         if(pref_path) {
             LOG(INFO, "Trying fallback path: %s", pref_path);
@@ -162,23 +158,19 @@ void refresh_script_list(Emulator* emu) {
     }
 }
 
-// Desenha o menu de seleção
 void render_script_selector_ui(Emulator* emu) {
     GraphicsContext* g = &emu->g_ctx;
     int w = g->screen_width;
     int h = g->screen_height;
     
-    // Fundo semi-transparente
     SDL_SetRenderDrawBlendMode(g->renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(g->renderer, 20, 20, 30, 245);
     SDL_FRect bg = {w * 0.1f, h * 0.1f, w * 0.8f, h * 0.8f};
     SDL_RenderFillRect(g->renderer, &bg);
     
-    // Borda do menu
     SDL_SetRenderDrawColor(g->renderer, 0, 150, 255, 255);
     SDL_RenderRect(g->renderer, &bg);
 
-    // Título
     SDL_Color titleColor = {255, 255, 0, 255};
     SDL_Surface* surf = TTF_RenderText_Solid(g->font, "Select Lua Script", 0, titleColor);
     if (surf) {
@@ -189,10 +181,9 @@ void render_script_selector_ui(Emulator* emu) {
         SDL_DestroySurface(surf);
     }
 
-    // Lista de Arquivos
     SDL_Color txtColor = {255, 255, 255, 255};
     float start_y = bg.y + 80;
-    float item_h = (bg.h - 140) / 8; // Calcula altura dinâmica para caber ~8 itens
+    float item_h = (bg.h - 140) / 8; 
     if (item_h < 40) item_h = 40;
 
     if (emu->script_count == 0) {
@@ -206,20 +197,16 @@ void render_script_selector_ui(Emulator* emu) {
     }
 
     for (int i = 0; i < emu->script_count; i++) {
-        // Texto do arquivo
         surf = TTF_RenderText_Solid(g->font, emu->script_list[i], 0, txtColor);
         if (surf) {
-            // Botão de fundo para clique
             SDL_SetRenderDrawColor(g->renderer, 60, 60, 80, 255);
             SDL_FRect btnRect = {bg.x + 20, start_y + (i * (item_h + 5)), bg.w - 40, item_h};
             SDL_RenderFillRect(g->renderer, &btnRect);
             
-            // Highlight na borda
             SDL_SetRenderDrawColor(g->renderer, 100, 100, 120, 255);
             SDL_RenderRect(g->renderer, &btnRect);
 
             SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
-            // Centraliza texto verticalmente no botão
             SDL_FRect dst = {btnRect.x + 10, btnRect.y + (btnRect.h - surf->h)/2, (float)surf->w, (float)surf->h};
             SDL_RenderTexture(g->renderer, tex, NULL, &dst);
             
@@ -228,7 +215,6 @@ void render_script_selector_ui(Emulator* emu) {
         }
     }
 
-    // Botão Cancelar
     SDL_Color cancelColor = {255, 100, 100, 255};
     surf = TTF_RenderText_Solid(g->font, "CLOSE / STOP LUA", 0, cancelColor);
     if (surf) {
@@ -246,7 +232,6 @@ void render_script_selector_ui(Emulator* emu) {
     SDL_SetRenderDrawBlendMode(g->renderer, SDL_BLENDMODE_NONE);
 }
 
-// Trata cliques no seletor
 void handle_script_selector_input(Emulator* emu, int x, int y) {
     GraphicsContext* g = &emu->g_ctx;
     int w = g->screen_width;
@@ -258,68 +243,22 @@ void handle_script_selector_input(Emulator* emu, int x, int y) {
     float item_h = (bg_h - 140) / 8;
     if (item_h < 40) item_h = 40;
 
-    // Verifica clique nos arquivos
     for (int i = 0; i < emu->script_count; i++) {
         float btn_y = start_y + (i * (item_h + 5));
         if (x > w * 0.1f && x < w * 0.9f && y > btn_y && y < btn_y + item_h) {
             
-            // Constroi o caminho completo
             char full_path[1024];
             snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, emu->script_list[i]);
             
-            // Carrega o script selecionado
-            // Nota: passamos o nome do arquivo, a função load vai resolver o path ou podemos passar full
-            // A função load_script do lua_bridge agora precisa ser inteligente ou receber o path completo.
-            // Para garantir, vamos modificar como chamamos ou usar um trick:
-            // Vamos mudar momentaneamente o base path ou passar full_path e ajustar lua_bridge.
-            
-            // Ajuste rápido: Vamos passar o nome relativo e deixar lua_bridge usar SCRIPT_PATH se implementado lá,
-            // mas como lua_bridge usa SDL_GetPrefPath, precisamos passar o path relativo se ele estiver em PrefPath,
-            // ou path absoluto se estiver no SCRIPT_PATH.
-            
-            // A solução mais robusta: Passar o path absoluto para lua_bridge e fazer ela aceitar.
-            // Vou assumir que lua_bridge_load_script consegue lidar com isso se eu passar "../../../..." ou 
-            // vamos apenas recriar a função de load aqui inline se necessário. 
-            // Mas o melhor é chamar a função de bridge passando apenas o nome do arquivo e 
-            // garantir que o arquivo esteja onde o lua_bridge procura.
-            
-            // *HACK*: Vamos copiar o arquivo selecionado para onde o SDL_GetPrefPath aponta (se forem diferentes)
-            // OU melhor: vamos assumir que SCRIPT_PATH é onde tudo está.
-            
-            // Para simplificar, vou alterar a chamada da bridge para receber o nome e
-            // internamente no código abaixo eu copio o arquivo para garantir que o C e o Lua se encontrem,
-            // OU modifico o lua_bridge para aceitar full path.
-            
-            // Neste código, vou assumir que lua_bridge_load_script recebe o nome do arquivo.
-            // Como SCRIPT_PATH é o caminho real, vamos tentar passar o caminho completo.
-            
-            // **IMPORTANTE**: Modifiquei lua_bridge.c na resposta anterior para usar SDL_GetPrefPath.
-            // Se SCRIPT_PATH for diferente, vai falhar.
-            // Truque: SDL_GetPrefPath no Android normalmente retorna /data/user/0/...
-            // O arquivo está em /storage/emulated/0/...
-            
-            // Solução: Vou chamar uma função que carrega direto o arquivo full path.
-            // Como não posso alterar lua_bridge.c agora, vou assumir que você aplicou o patch que permite full path 
-            // ou que os diretórios são linkados.
-            
-            // TENTATIVA 1: Passar o caminho absoluto. O `luaL_loadfile` aceita caminhos absolutos.
-            // O `lua_bridge_load_script` que fiz antes concatena com PrefPath. Isso vai quebrar se passarmos absoluto.
-            
-            // CORREÇÃO IMEDIATA: Vamos reescrever `tas_toggle_lua_script` para usar um path manual
-            // se o seletor for usado.
-            
-            // Vou fazer um bypass aqui acessando o contexto Lua diretamente seria sujo.
-            // Vou chamar `tas_load_script_absolute` (uma nova função que vou criar abaixo)
-            
+            // Agora a função já foi declarada
             tas_load_script_absolute(emu, full_path);
             
             emu->lua_script_active = 1;
-            emu->show_script_selector = 0; // Fecha o menu
+            emu->show_script_selector = 0; 
             return;
         }
     }
 
-    // Verifica clique no botão Cancelar/Parar
     float cancel_y = bg_y + bg_h - 60;
     if (x > w * 0.1f && x < w * 0.9f && y > cancel_y && y < cancel_y + 40) {
         emu->lua_script_active = 0; 
@@ -328,7 +267,6 @@ void handle_script_selector_input(Emulator* emu, int x, int y) {
     }
 }
 
-// Função auxiliar para carregar caminho absoluto (Bypass no lua_bridge padrão)
 void tas_load_script_absolute(Emulator* emu, const char* full_path) {
     if (!emu->lua_ctx || !emu->lua_ctx->L) return;
     LuaContext* ctx = emu->lua_ctx;
@@ -361,7 +299,7 @@ void tas_open_script_selector(Emulator* emu) {
 
 void tas_save_movie(Emulator* emu, const char* filename) {
     char full_path[1024];
-    snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename); // Salva na pasta externa
+    snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename); 
 
     FILE* f = fopen(full_path, "wb");
     if (f) {
@@ -439,8 +377,6 @@ void tas_step_frame(Emulator* emu) {
 }
 
 void tas_toggle_lua_script(Emulator* emu) {
-    // Atalho para carregar direto se não quiser usar o menu
-    // Mas agora usamos tas_open_script_selector
     tas_open_script_selector(emu);
 }
 
@@ -452,7 +388,6 @@ typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20];
 typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
 
 static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
-    // Usando SCRIPT_PATH para garantir que saves fiquem no mesmo lugar acessível
     snprintf(buffer, size, "%s%s_slot%d.save", SCRIPT_PATH, emu->rom_name, emu->current_save_slot);
 }
 
@@ -815,6 +750,7 @@ void run_emulator(struct Emulator* emulator){
     release_timer(&ft); release_timer(tm);
 }
 
+// IMPLEMENTAÇÃO DA FUNÇÃO reset_emulator
 void reset_emulator(Emulator* emulator) {
     if(emulator->g_ctx.is_tv) { 
         emulator->exit=1; 
