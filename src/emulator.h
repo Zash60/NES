@@ -23,6 +23,10 @@
 #define MAX_MOVIE_FRAMES 216000 
 #define TAS_HEADER_MAGIC 0x54415331 
 
+// Constantes para o Seletor de Scripts
+#define MAX_SCRIPTS 32
+#define MAX_FILENAME_LEN 64
+
 typedef struct {
     uint16_t joy1_status;
     uint16_t joy2_status;
@@ -64,8 +68,12 @@ typedef struct Emulator{
     uint8_t step_frame;         
     float slow_motion_factor;   
     
-    // RENOMEADO: Flag genérica para indicar se o script Lua está rodando
     uint8_t lua_script_active; 
+
+    // --- SCRIPT SELECTOR FIELDS ---
+    uint8_t show_script_selector;      // Flag para abrir o menu de scripts
+    char script_list[MAX_SCRIPTS][MAX_FILENAME_LEN]; // Cache de nomes de arquivos
+    int script_count;                  // Total de arquivos encontrados
 
     // --- LUA CONTEXT ---
     struct LuaContext* lua_ctx; 
@@ -86,6 +94,6 @@ void tas_toggle_recording(Emulator* emu);
 void tas_toggle_playback(Emulator* emu);
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
-void tas_toggle_lua_script(Emulator* emu); 
+void tas_open_script_selector(Emulator* emu); // Alterado de toggle_lua_script para open_selector
 void tas_save_movie(Emulator* emu, const char* filename);
 void tas_load_movie(Emulator* emu, const char* filename);
