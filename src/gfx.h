@@ -3,9 +3,7 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include <stdint.h>
-#include "ppu.h" // Necessário para acessar OAM
 
-// Variavel global para controle do filtro (0=Normal, 1=Scanlines)
 extern int video_filter_mode;
 
 typedef struct GraphicsContext{
@@ -26,14 +24,11 @@ typedef struct GraphicsContext{
 void free_graphics(GraphicsContext* ctx);
 void get_graphics_context(GraphicsContext* ctx);
 
-// Renderiza o buffer do jogo para a textura (NÃO chama present)
+// Renderiza o buffer do jogo para a textura
 void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint8_t mask_reg);
 
-// Desenha as hitboxes por cima da textura atual
-void render_hitboxes(GraphicsContext* g_ctx, struct PPU* ppu);
-
-// Desenha FPS, Filtros, Controles e joga tudo na tela (Present)
+// Desenha UI e finaliza
 void render_ui_and_present(GraphicsContext* g_ctx, float fps);
 
-// Desenha apenas o frame atual (para pause)
+// Desenha apenas o frame
 void render_frame_only(GraphicsContext* g_ctx);
