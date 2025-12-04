@@ -12,9 +12,7 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-
         externalNativeBuild {
             cmake {
                 cppFlags ""
@@ -41,7 +39,6 @@ android {
 
     externalNativeBuild {
         cmake {
-            // CORREÇÃO AQUI: Aponta para a raiz do projeto (2 níveis acima de android/app)
             path file("../../CMakeLists.txt")
             version "3.22.1"
         }
@@ -59,8 +56,15 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     
-    // Necessário para o suporte a TV (Leanback)
+    // Android TV / Leanback
     implementation 'androidx.leanback:leanback:1.0.0'
+    
+    // Glide for Image Loading
+    implementation 'com.github.bumptech.glide:glide:4.16.0'
+    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
+
+    // Annotations Fix
+    implementation 'androidx.annotation:annotation:1.7.1'
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
