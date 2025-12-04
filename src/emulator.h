@@ -20,21 +20,22 @@
 #define IDLE_SLEEP 50
 
 // --- TAS CONSTANTS ---
-#define MAX_MOVIE_FRAMES 216000 // Aprox. 1 hora de gravação a 60fps
-#define TAS_HEADER_MAGIC 0x54415331 // "TAS1"
+#define MAX_MOVIE_FRAMES 216000 
+#define TAS_HEADER_MAGIC 0x54415331 
 
-// Estrutura para input de um frame
 typedef struct {
     uint16_t joy1_status;
     uint16_t joy2_status;
 } FrameInput;
 
-// Estrutura do Filme
 typedef struct {
     uint32_t magic;
     uint32_t frame_count;
     FrameInput* frames; 
 } TASMovie;
+
+// Forward declaration
+struct LuaContext;
 
 typedef struct Emulator{
     c6502 cpu;
@@ -60,9 +61,12 @@ typedef struct Emulator{
     uint32_t current_frame_index;
     uint8_t is_recording;
     uint8_t is_playing;
-    uint8_t step_frame;         // Frame Advance
-    float slow_motion_factor;   // 1.0 = Normal, 2.0 = 50%, etc
-    uint8_t show_hitboxes;      // Visualização de Hitboxes
+    uint8_t step_frame;         
+    float slow_motion_factor;   
+    // uint8_t show_hitboxes; // REMOVIDO: Agora controlado via Lua
+
+    // --- LUA CONTEXT ---
+    struct LuaContext* lua_ctx; // NOVO
 } Emulator;
 
 void init_emulator(Emulator* emulator, int argc, char *argv[]);
@@ -80,6 +84,6 @@ void tas_toggle_recording(Emulator* emu);
 void tas_toggle_playback(Emulator* emu);
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
-void tas_toggle_hitboxes(Emulator* emu);
+void tas_toggle_lua_script(Emulator* emu); // Renomeado de hitboxes
 void tas_save_movie(Emulator* emu, const char* filename);
 void tas_load_movie(Emulator* emu, const char* filename);
