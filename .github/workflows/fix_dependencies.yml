@@ -1,13 +1,13 @@
-name: Fix Dependencies and Imports
+name: Fix Library Name and Build
 
 on:
-  workflow_dispatch: # Permite rodar manualmente clicando num botão
+  workflow_dispatch:
 
 jobs:
-  fix-and-commit:
+  fix-and-build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Permissão necessária para fazer push
+      contents: write
 
     steps:
       - name: Checkout code
@@ -15,111 +15,47 @@ jobs:
 
       - name: Create Fix Script
         run: |
-          cat > fix_project.sh <<'EOF'
+          cat > fix_final.sh <<'EOF'
           #!/bin/bash
-          echo "Iniciando correcoes..."
-
-          # 1. Reescrever build.gradle
-          cat > android/app/build.gradle <<GRADLE
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.barracoder.android'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId "com.barracoder.android"
-                  minSdk 21
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-                  externalNativeBuild {
-                      cmake {
-                          cppFlags ""
-                          arguments "-DANDROID_STL=c++_shared"
-                      }
-                  }
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
-                      debuggable true
-                      jniDebuggable true
-                  }
-              }
-              
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
-              }
-
-              externalNativeBuild {
-                  cmake {
-                      path file("../../CMakeLists.txt")
-                      version "3.22.1"
-                  }
-              }
-
-              packagingOptions {
-                  jniLibs {
-                      pickFirsts += ['**/*.so']
-                  }
-              }
-          }
-
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
-              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-              
-              // Android TV / Leanback
-              implementation 'androidx.leanback:leanback:1.0.0'
-              
-              // Glide for Image Loading
-              implementation 'com.github.bumptech.glide:glide:4.16.0'
-              annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
-
-              // Annotations Fix
-              implementation 'androidx.annotation:annotation:1.7.1'
-
-              testImplementation 'junit:junit:4.13.2'
-              androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-              androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-          }
-          GRADLE
-
-          # 2. Corrigir Imports Java em massa
-          # Encontra todos os arquivos Java e substitui os imports incorretos
-          find android/app/src/main/java -name "*.java" -type f -print0 | xargs -0 sed -i 's/import org.jspecify.annotations/import androidx.annotation/g'
-
-          echo "Script finalizado."
+          echo "Aplicando correcoes..."
+          
+          # Sobrescreve CMakeLists.txt com a versao correta (target 'nes')
+          cat > CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.22.1)
+          project(nes C)
+          set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+          set(LUA_DIR ${SRC_DIR}/lua)
+          set(EXTERNAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external)
+          add_subdirectory(${EXTERNAL_DIR}/SDL)
+          add_subdirectory(${EXTERNAL_DIR}/SDL_ttf)
+          file(GLOB LUA_SOURCES "${LUA_DIR}/*.c")
+          list(REMOVE_ITEM LUA_SOURCES "${LUA_DIR}/lua.c" "${LUA_DIR}/luac.c")
+          add_library(lua STATIC ${LUA_SOURCES})
+          target_include_directories(lua PUBLIC ${LUA_DIR})
+          target_compile_definitions(lua PRIVATE LUA_USE_LINUX LUA_USE_C89)
+          set(NES_SOURCES ${SRC_DIR}/main.c ${SRC_DIR}/emulator.c ${SRC_DIR}/cpu6502.c ${SRC_DIR}/ppu.c ${SRC_DIR}/apu.c ${SRC_DIR}/mmu.c ${SRC_DIR}/mappers/mapper.c ${SRC_DIR}/mappers/uxrom.c ${SRC_DIR}/mappers/mmc1.c ${SRC_DIR}/mappers/cnrom.c ${SRC_DIR}/mappers/gnrom.c ${SRC_DIR}/mappers/axrom.c ${SRC_DIR}/mappers/mmc3.c ${SRC_DIR}/mappers/colordreams.c ${SRC_DIR}/controller.c ${SRC_DIR}/gamepad.c ${SRC_DIR}/gfx.c ${SRC_DIR}/timers.c ${SRC_DIR}/utils.c ${SRC_DIR}/nsf.c ${SRC_DIR}/genie.c ${SRC_DIR}/debugtools.c ${SRC_DIR}/biquad.c ${SRC_DIR}/touchpad.c ${SRC_DIR}/lua_bridge.c)
+          
+          # LIBRARY NAME: nes (Gera libnes.so)
+          add_library(nes SHARED ${NES_SOURCES})
+          
+          target_include_directories(nes PRIVATE ${SRC_DIR} ${SRC_DIR}/mappers ${LUA_DIR} ${EXTERNAL_DIR}/SDL/include ${EXTERNAL_DIR}/SDL/include/SDL3 ${EXTERNAL_DIR}/SDL_ttf/include ${EXTERNAL_DIR}/SDL_ttf/include/SDL3_ttf)
+          target_compile_definitions(nes PRIVATE ANDROID DEBUGGING_ENABLED)
+          target_link_libraries(nes PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf lua android log m)
+          CMAKE
+          
+          echo "Correcoes aplicadas."
           EOF
 
-      - name: Make script executable and run it
+      - name: Run Fix Script
         run: |
-          chmod +x fix_project.sh
-          ./fix_project.sh
-          rm fix_project.sh # Remove o script antes de commitar
+          chmod +x fix_final.sh
+          ./fix_final.sh
+          rm fix_final.sh
 
-      - name: Commit and Push changes
+      - name: Commit changes
         run: |
-          git config --global user.name "GitHub Action Bot"
-          git config --global user.email "action@github.com"
-          
-          git add android/app/build.gradle
-          git add android/app/src/main/java/
-          
-          # Só faz commit se houver mudanças
-          if git diff-index --quiet HEAD --; then
-            echo "Nenhuma alteracao detectada."
-          else
-            git commit -m "Fix: Add Glide dependency and replace jspecify with androidx annotations"
-            git push
-          fi
+          git config --global user.name "FixBot"
+          git config --global user.email "bot@example.com"
+          git add CMakeLists.txt
+          git commit -m "Fix: Rename lib to libnes.so and fix includes" || echo "No changes to commit"
+          git push
