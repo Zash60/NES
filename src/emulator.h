@@ -14,8 +14,6 @@
 #define PAL_FRAME_RATE 50
 
 // turbo keys toggle rate (Hz)
-// value should be a factor of FRAME_RATE
-// and should never exceed FRAME_RATE for best result
 #define NTSC_TURBO_RATE 30
 #define PAL_TURBO_RATE 25
 
@@ -38,13 +36,18 @@ typedef struct Emulator{
 
     uint8_t exit;
     uint8_t pause;
+    
+    // Novos campos para Save State
+    char rom_name[256];     // Nome base da ROM
+    int current_save_slot;  // Slot atual (0-9)
 } Emulator;
 
 
 void init_emulator(Emulator* emulator, int argc, char *argv[]);
 void reset_emulator(Emulator* emulator);
 void run_emulator(Emulator* emulator);
-void save_state(Emulator* emulator, const char* filename);
-void load_state(Emulator* emulator, const char* filename);
+void save_state(Emulator* emulator, const char* filename_unused);
+void load_state(Emulator* emulator, const char* filename_unused);
+void increment_save_slot(Emulator* emulator);
 void run_NSF_player(Emulator* emulator);
 void free_emulator(Emulator* emulator);
