@@ -24,7 +24,7 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
     Context context;
     ArrayList<NESItemModel> list;
 
-    public  NESItemAdapter(Context context, ArrayList<NESItemModel> list){
+    public NESItemAdapter(Context context, ArrayList<NESItemModel> list){
         this.context = context;
         this.list = list;
     }
@@ -41,17 +41,14 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
         NESItemHolder holder = new NESItemHolder(view);
 
         holder.playButton.setOnClickListener(v -> {
-            if(holder.item == null)
-                return;
+            if(holder.item == null) return;
             Intent intent = new Intent(context, EmulatorActivity.class);
             intent.putExtra("rom", holder.item.getRom());
             context.startActivity(intent);
         });
 
-        // Opcional: Botão Magic (Game Genie)
         holder.magicButton.setOnClickListener(v -> {
-            if(holder.item == null || !holder.item.isNES())
-                return;
+            if(holder.item == null || !holder.item.isNES()) return;
             Intent intent = new Intent(context, EmulatorActivity.class);
             intent.putExtra("rom", holder.item.getRom());
             intent.putExtra("genie", true);
@@ -64,7 +61,18 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
     public void onBindViewHolder(@NonNull NESItemHolder holder, int position) {
         NESItemModel item = list.get(position);
         holder.item = item;
+        
         holder.gameName.setText(item.getName());
+        
+        // Configurar Detalhes
+        if (holder.gameDetails != null) {
+            if (item.isNSF()) {
+                holder.gameDetails.setText("NES Sound Format");
+            } else {
+                holder.gameDetails.setText("Nintendo NES");
+            }
+        }
+
         if(item.getImage() != null)
             Glide.with(context).load(item.getImage()).into(new CustomTarget<Drawable>() {
                 @Override
@@ -73,14 +81,12 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
                         holder.gameImage.setImageDrawable(resource);
                         return;
                     }
-                    // Add a badge to distinguish NSF from NES roms
                     Drawable[] layers = new Drawable[2];
                     layers[0] = resource;
-                    layers[1] = ContextCompat.getDrawable(context, R.drawable.ic_badge_music); 
+                    layers[1] = ContextCompat.getDrawable(context, R.drawable.ic_badge_music);
                     LayerDrawable drawable = new LayerDrawable(layers);
                     holder.gameImage.setImageDrawable(drawable);
                 }
-
                 @Override
                 public void onLoadCleared(@Nullable Drawable placeholder) {
                     holder.gameImage.setImageDrawable(placeholder);
@@ -91,10 +97,8 @@ public class NESItemAdapter extends RecyclerView.Adapter<NESItemHolder> {
         else
             holder.gameImage.setImageResource(R.drawable.controller);
 
-        holder.playButton.setText(item.isNES()? context.getString(R.string.play) : context.getString(R.string.listen));
+        holder.playButton.setText(item.isNES()? "JOGAR" : "OUVIR");
 
-        // CORREÇÃO: Removida a verificação de activity.hasGenie
-        // Se for um jogo NES, mostra o botão magic (pode ser ajustado conforme necessidade)
         if(item.isNES())
             holder.magicButton.setVisibility(View.VISIBLE);
         else
