@@ -46,12 +46,12 @@ typedef struct TouchButton{
 #define BTN_ID_TAS_PLAY   0x40002
 #define BTN_ID_TAS_SLOW   0x40003
 #define BTN_ID_TAS_STEP   0x40004
-#define BTN_ID_TAS_BOX    0x40005
+#define BTN_ID_TAS_BOX    0x40005 // Botão LUA/Box
 
 typedef struct TouchPad{
     uint16_t status;
     
-    // Botões mapeados
+    // Botões mapeados para acesso direto
     TouchButton A, turboA, B, turboB, select, start;
     TouchButton menu, save, load;
     
@@ -75,6 +75,11 @@ void init_touch_pad(struct Emulator* emulator);
 void free_touch_pad();
 void render_touch_controls(GraphicsContext* ctx);
 void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event);
+void toggle_edit_mode();
+uint8_t is_edit_mode();
+
+// Função auxiliar para o loop principal saber se deve desenhar o menu de pausa
+int is_tas_toolbar_open();
 
 #define ANDROID_INIT_TOUCH_PAD(EMU) init_touch_pad(EMU)
 #define ANDROID_FREE_TOUCH_PAD() free_touch_pad()
@@ -82,6 +87,7 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event);
 #define ANDROID_TOUCHPAD_MAPPER(JOYPAD, EVENT) touchpad_mapper(JOYPAD, EVENT)
 
 #else
+// Stubs para Desktop
 #define ANDROID_INIT_TOUCH_PAD(EMU)
 #define ANDROID_FREE_TOUCH_PAD()
 #define ANDROID_RENDER_TOUCH_CONTROLS(CTX)
