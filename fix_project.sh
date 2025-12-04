@@ -1,110 +1,96 @@
 #!/bin/bash
 
-echo "Iniciando correcoes do projeto..."
+echo "Aplicando correcao final (Library Name + SDL Includes + Lua Fix)..."
 
-# 1. Reescrever android/app/build.gradle com as dependencias corretas
-echo "Atualizando android/app/build.gradle..."
-cat > android/app/build.gradle <<EOF
-plugins {
-    id 'com.android.application'
-}
+# 1. Reescreve o CMakeLists.txt com todas as correcoes:
+#    - Muda o nome do target de 'main' para 'nes' (Resolve o erro da tela do celular)
+#    - Adiciona LUA_USE_C89 (Resolve o erro fseeko/ftello)
+#    - Adiciona caminhos de include do SDL3 explicitos (Resolve o erro SDL.h not found)
+cat > CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.22.1)
 
-android {
-    namespace 'com.barracoder.android'
-    compileSdk 34
+project(nes C)
 
-    defaultConfig {
-        applicationId "com.barracoder.android"
-        minSdk 21
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
+# --- Configuração de Diretórios ---
+set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(LUA_DIR ${SRC_DIR}/lua)
+set(EXTERNAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external)
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+# --- SDL3 Setup ---
+add_subdirectory(${EXTERNAL_DIR}/SDL)
 
-        externalNativeBuild {
-            cmake {
-                cppFlags ""
-                arguments "-DANDROID_STL=c++_shared"
-            }
-        }
-    }
+# --- SDL3_ttf Setup ---
+add_subdirectory(${EXTERNAL_DIR}/SDL_ttf)
 
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-        debug {
-            debuggable true
-            jniDebuggable true
-        }
-    }
-    
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
+# --- Lua Setup ---
+file(GLOB LUA_SOURCES "${LUA_DIR}/*.c")
+list(REMOVE_ITEM LUA_SOURCES "${LUA_DIR}/lua.c" "${LUA_DIR}/luac.c")
 
-    externalNativeBuild {
-        cmake {
-            path file("../../CMakeLists.txt")
-            version "3.22.1"
-        }
-    }
+add_library(lua STATIC ${LUA_SOURCES})
+target_include_directories(lua PUBLIC ${LUA_DIR})
+# FIX 1: LUA_USE_C89 resolve erros de fseeko/ftello no Android
+target_compile_definitions(lua PRIVATE LUA_USE_LINUX LUA_USE_C89)
 
-    packagingOptions {
-        jniLibs {
-            pickFirsts += ['**/*.so']
-        }
-    }
-}
+# --- NES Emulator Setup ---
 
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    
-    // Android TV / Leanback
-    implementation 'androidx.leanback:leanback:1.0.0'
-    
-    // Glide for Image Loading
-    implementation 'com.github.bumptech.glide:glide:4.16.0'
-    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
-
-    // Annotations (Fixes org.jspecify vs androidx issue)
-    implementation 'androidx.annotation:annotation:1.7.1'
-
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-}
-EOF
-
-# 2. Corrigir os imports nos arquivos Java
-# Substitui "org.jspecify.annotations" por "androidx.annotation"
-echo "Corrigindo imports Java..."
-
-# Lista de arquivos que precisam ser corrigidos
-JAVA_FILES=(
-    "android/app/src/main/java/com/barracoder/android/tv/MainFragment.java"
-    "android/app/src/main/java/com/barracoder/android/tv/BackgroundProvisioner.java"
-    "android/app/src/main/java/com/barracoder/android/tv/CardPresenter.java"
-    "android/app/src/main/java/com/barracoder/android/NESItemAdapter.java"
+set(NES_SOURCES
+    ${SRC_DIR}/main.c
+    ${SRC_DIR}/emulator.c
+    ${SRC_DIR}/cpu6502.c
+    ${SRC_DIR}/ppu.c
+    ${SRC_DIR}/apu.c
+    ${SRC_DIR}/mmu.c
+    ${SRC_DIR}/mappers/mapper.c
+    ${SRC_DIR}/mappers/uxrom.c
+    ${SRC_DIR}/mappers/mmc1.c
+    ${SRC_DIR}/mappers/cnrom.c
+    ${SRC_DIR}/mappers/gnrom.c
+    ${SRC_DIR}/mappers/axrom.c
+    ${SRC_DIR}/mappers/mmc3.c
+    ${SRC_DIR}/mappers/colordreams.c
+    ${SRC_DIR}/controller.c
+    ${SRC_DIR}/gamepad.c
+    ${SRC_DIR}/gfx.c
+    ${SRC_DIR}/timers.c
+    ${SRC_DIR}/utils.c
+    ${SRC_DIR}/nsf.c
+    ${SRC_DIR}/genie.c
+    ${SRC_DIR}/debugtools.c
+    ${SRC_DIR}/biquad.c
+    ${SRC_DIR}/touchpad.c
+    ${SRC_DIR}/lua_bridge.c
 )
 
-for file in "${JAVA_FILES[@]}"; do
-    if [ -f "$file" ]; then
-        echo "Corrigindo $file..."
-        # Substitui NonNull
-        sed -i 's/import org.jspecify.annotations.NonNull;/import androidx.annotation.NonNull;/g' "$file"
-        # Substitui Nullable
-        sed -i 's/import org.jspecify.annotations.Nullable;/import androidx.annotation.Nullable;/g' "$file"
-        # Substitui uso inline se houver (ex: @org.jspecify...)
-        sed -i 's/org.jspecify.annotations/androidx.annotation/g' "$file"
-    else
-        echo "Aviso: Arquivo $file nao encontrado."
-    fi
-done
+# FIX 2: Nome da biblioteca alterado para 'nes' para bater com o Java (libnes.so)
+add_library(nes SHARED ${NES_SOURCES})
 
-echo "Correcoes aplicadas com sucesso."
+# --- Include Directories ---
+target_include_directories(nes PRIVATE
+    ${SRC_DIR}
+    ${SRC_DIR}/mappers
+    ${LUA_DIR}
+    # FIX 3: Caminhos explícitos para headers do SDL3
+    ${EXTERNAL_DIR}/SDL/include
+    ${EXTERNAL_DIR}/SDL/include/SDL3
+    ${EXTERNAL_DIR}/SDL_ttf/include
+    ${EXTERNAL_DIR}/SDL_ttf/include/SDL3_ttf
+)
+
+# --- Definições de Compilação ---
+target_compile_definitions(nes PRIVATE 
+    ANDROID 
+    DEBUGGING_ENABLED
+)
+
+# --- Linkagem ---
+target_link_libraries(nes PRIVATE
+    SDL3::SDL3
+    SDL3_ttf::SDL3_ttf
+    lua
+    android
+    log
+    m
+)
+EOF
+
+echo "CMakeLists.txt atualizado com sucesso."
