@@ -23,7 +23,7 @@ static uint16_t TURBO_SKIP;
 
 static uint32_t last_state_action_time = 0;
 
-// --- Menu ---
+// --- Estruturas do Menu ---
 typedef struct {
     char label[32];
     SDL_Rect rect;
@@ -33,9 +33,9 @@ typedef struct {
 #define MENU_COUNT 8
 MenuOption menu_options[MENU_COUNT];
 
-// Forward decls de touchpad.c
-void toggle_edit_mode();
-uint8_t is_edit_mode();
+// --- Declarações Forward ---
+void toggle_edit_mode(); // Definido em touchpad.c
+uint8_t is_edit_mode();  // Definido em touchpad.c
 
 // --- Estruturas para Serialização (Snapshots) ---
 typedef struct {
@@ -285,8 +285,6 @@ void handle_menu_touch(int x, int y, Emulator* emu) {
     }
 }
 
-// --- Init ---
-
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(argc < 2) quit(EXIT_FAILURE);
     memset(emulator, 0, sizeof(Emulator));
@@ -320,8 +318,6 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(!emulator->g_ctx.is_tv) init_menu_layout(emulator->g_ctx.screen_width, emulator->g_ctx.screen_height);
 }
 
-// --- Loop Principal ---
-
 void run_emulator(struct Emulator* emulator){
     if(emulator->mapper.is_nsf) { run_NSF_player(emulator); return; }
     
@@ -348,7 +344,7 @@ void run_emulator(struct Emulator* emulator){
         if(ppu->frames % TURBO_SKIP == 0) { turbo_trigger(j1); turbo_trigger(j2); }
 
         if(!emulator->pause){
-            // Loop de Execução
+            // Loop principal de renderização (JOGO)
             while(!ppu->render) {
                 execute_ppu(ppu); execute_ppu(ppu); execute_ppu(ppu);
                 if(emulator->type == PAL) {
@@ -356,13 +352,12 @@ void run_emulator(struct Emulator* emulator){
                 }
                 execute(cpu); execute_apu(apu);
             }
-            
-            // FPS Calc
             frames++;
             if(SDL_GetTicks() > last_fps + 1000) { fps = frames / ((SDL_GetTicks()-last_fps)/1000.0f); last_fps=SDL_GetTicks(); frames=0; }
             
-            // Renderização com Máscara lateral (fix JP glitch)
+            // Renderiza com máscara lateral e scanlines
             render_graphics(g, ppu->screen, fps, ppu->mask);
+            
             ppu->render = 0;
             queue_audio(apu, g);
             mark_end(tm); adjusted_wait(tm);
@@ -383,8 +378,6 @@ void reset_emulator(Emulator* emulator) {
     if(emulator->mapper.reset) emulator->mapper.reset(&emulator->mapper);
 }
 
-// --- NSF Player (Musica) ---
-
 void run_NSF_player(struct Emulator* emulator) {
     LOG(INFO, "Starting NSF player...");
     JoyPad* joy1 = &emulator->mem.joy1;
@@ -402,6 +395,7 @@ void run_NSF_player(struct Emulator* emulator) {
     init_timer(&frame_timer, PERIOD);
     mark_start(&frame_timer);
     size_t cycles_per_frame, nmi_cycle_start;
+    
     if(emulator->type == PAL) {
         cycles_per_frame = emulator->mapper.NSF->speed * 1.662607f;
         nmi_cycle_start = cycles_per_frame - 7459;
@@ -409,8 +403,8 @@ void run_NSF_player(struct Emulator* emulator) {
         cycles_per_frame = emulator->mapper.NSF->speed * 1.789773f;
         nmi_cycle_start = cycles_per_frame - 2273;
     }
+    
     uint8_t status1 = 0, status2 = 0;
-
     init_song(emulator, nsf->current_song);
 
     while (!emulator->exit) {
@@ -418,6 +412,7 @@ void run_NSF_player(struct Emulator* emulator) {
         while (SDL_PollEvent(&e)) {
             update_joypad(joy1, &e);
             update_joypad(joy2, &e);
+            
             if((status1 & RIGHT && !(joy1->status & RIGHT)) || (status2 & RIGHT && !(joy2->status & RIGHT))) {
                 next_song(emulator, nsf);
             } else if((status1 & LEFT && !(joy1->status & LEFT)) || (status2 & LEFT && !(joy2->status & LEFT))) {
@@ -433,7 +428,17 @@ void run_NSF_player(struct Emulator* emulator) {
                 init_song(emulator, nsf->current_song);
             }
 
-            if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_AC_BACK)) emulator->exit = 1;
+            if (e.type == SDL_EVENT_KEY_DOWN) {
+                switch (e.key.key) {
+                    case SDLK_ESCAPE: emulator->exit = 1; break;
+                    case SDLK_MEDIA_PLAY: case SDLK_SPACE: emulator->pause ^= 1; break;
+                    case SDLK_MEDIA_NEXT_TRACK: next_song(emulator, nsf); break;
+                    case SDLK_MEDIA_PREVIOUS_TRACK: prev_song(emulator, nsf); break;
+                    case SDLK_F5: reset_emulator(emulator); init_song(emulator, nsf->current_song); break;
+                    default: break;
+                }
+            }
+            if (e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_AC_BACK)) emulator->exit = 1;
         }
 
         if(nsf->times != NULL && !nsf->initializing) {
@@ -506,6 +511,12 @@ void run_NSF_player(struct Emulator* emulator) {
 }
 
 void free_emulator(struct Emulator* emulator){
-    exit_APU(); exit_ppu(&emulator->ppu); free_mapper(&emulator->mapper);
-    ANDROID_FREE_TOUCH_PAD(); free_graphics(&emulator->g_ctx); release_timer(&emulator->timer);
+    LOG(DEBUG, "Starting emulator clean up");
+    exit_APU();
+    exit_ppu(&emulator->ppu);
+    free_mapper(&emulator->mapper);
+    ANDROID_FREE_TOUCH_PAD();
+    free_graphics(&emulator->g_ctx);
+    release_timer(&emulator->timer);
+    LOG(DEBUG, "Emulator session successfully terminated");
 }
