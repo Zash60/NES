@@ -71,9 +71,9 @@ typedef struct Emulator{
     uint8_t lua_script_active; 
 
     // --- SCRIPT SELECTOR FIELDS ---
-    uint8_t show_script_selector;      // Flag para abrir o menu de scripts
-    char script_list[MAX_SCRIPTS][MAX_FILENAME_LEN]; // Cache de nomes de arquivos
-    int script_count;                  // Total de arquivos encontrados
+    uint8_t show_script_selector;
+    char script_list[MAX_SCRIPTS][MAX_FILENAME_LEN];
+    int script_count;
 
     // --- LUA CONTEXT ---
     struct LuaContext* lua_ctx; 
@@ -94,6 +94,6 @@ void tas_toggle_recording(Emulator* emu);
 void tas_toggle_playback(Emulator* emu);
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
-void tas_open_script_selector(Emulator* emu); // Alterado de toggle_lua_script para open_selector
+void tas_open_script_selector(Emulator* emu); 
 void tas_save_movie(Emulator* emu, const char* filename);
 void tas_load_movie(Emulator* emu, const char* filename);
