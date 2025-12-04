@@ -159,11 +159,6 @@ void tas_toggle_hitboxes(Emulator* emu) {
 // --- TAS IMPLEMENTATION END ---
 
 // --- Save/Load State Logic ---
-// (Mesma implementação fornecida anteriormente, mantida aqui para completude)
-typedef struct { uint32_t magic; uint32_t version; uint32_t padding; } SaveHeader;
-typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
-typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
-typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
 
 static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
     char* base_path = SDL_GetPrefPath("Barracoder", "AndroNES");
@@ -174,6 +169,12 @@ static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
         snprintf(buffer, size, "%s_slot%d.save", emu->rom_name, emu->current_save_slot);
     }
 }
+
+// Estruturas de Snapshot para salvar estado
+typedef struct { uint32_t magic; uint32_t version; uint32_t padding; } SaveHeader;
+typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
+typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
+typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
 
 void save_state(Emulator* emulator, const char* unused) {
     uint32_t now = SDL_GetTicks();
@@ -414,7 +415,7 @@ void run_emulator(struct Emulator* emulator){
                     case SDLK_F6: tas_toggle_playback(emulator); break;
                     case SDLK_F7: tas_toggle_slow_motion(emulator); break;
                     case SDLK_F8: tas_toggle_hitboxes(emulator); break;
-                    case SDLK_p:  tas_step_frame(emulator); break;
+                    case SDLK_P:  tas_step_frame(emulator); break; // Correção aplicada aqui
                 }
             }
         }
@@ -520,22 +521,10 @@ void free_emulator(struct Emulator* emulator){
     if(emulator->movie.frames) free(emulator->movie.frames);
 }
 
-// O código do NSF Player e run_NSF_player permanece o mesmo do original
-// pois TAS geralmente não se aplica a NSF (Player de Música)
+// --- NSF Player ---
+
 void run_NSF_player(struct Emulator* emulator) {
-    // ... (Copiar implementação original inalterada) ...
-    // Devido ao limite de tamanho e irrelevância para a feature TAS,
-    // mantenha o código original desta função.
-    // Se necessário, apenas cole o bloco original aqui.
-    // Para compilar, ele deve existir. Vou colocar o corpo simplificado
-    // apontando para o original se o usuário copiar por cima.
     LOG(INFO, "Starting NSF player...");
-    // ... (Use o código original de nsf.c/emulator.c para esta função)
-    // O loop principal foi o foco das mudanças.
-    // Assumindo que o usuário tem o código original para esta parte específica.
-    // Se não, o código anterior fornecido na pergunta contém a versão completa.
-    
-    // (Implementação completa incluída por segurança)
     JoyPad* joy1 = &emulator->mem.joy1;
     JoyPad* joy2 = &emulator->mem.joy2;
     c6502* cpu = &emulator->cpu;
