@@ -8,6 +8,7 @@
 #include "timers.h"
 #include "debugtools.h"
 #include "utils.h"
+#include "lua_bridge.h" // Inclui o novo header
 
 #include <SDL.h>
 #include <SDL_ttf.h>
@@ -17,14 +18,12 @@
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
-// --- Configurações ---
 #define SAVE_LOAD_COOLDOWN 1000
 #define SAVE_MAGIC 0x4E45535C 
 #define SAVE_VERSION 3
 
 static uint32_t last_state_action_time = 0;
 
-// --- Menu ---
 typedef struct {
     char label[32];
     SDL_Rect rect;
@@ -34,11 +33,10 @@ typedef struct {
 #define MENU_COUNT 8
 MenuOption menu_options[MENU_COUNT];
 
-// Forward declarations
 void toggle_edit_mode();
 uint8_t is_edit_mode();
 
-// --- TAS IMPLEMENTATION START ---
+// --- TAS IMPLEMENTATION ---
 
 void tas_init(Emulator* emu) {
     emu->movie.frames = (FrameInput*)calloc(MAX_MOVIE_FRAMES, sizeof(FrameInput));
@@ -53,7 +51,9 @@ void tas_init(Emulator* emu) {
     emu->is_playing = 0;
     emu->step_frame = 0;
     emu->slow_motion_factor = 1.0f;
-    emu->show_hitboxes = 0;
+    
+    // Inicializa Lua
+    lua_bridge_init(emu);
 }
 
 void tas_save_movie(Emulator* emu, const char* filename) {
@@ -117,7 +117,7 @@ void tas_toggle_recording(Emulator* emu) {
         emu->is_playing = 0;
         emu->current_frame_index = 0;
         emu->movie.frame_count = 0;
-        reset_emulator(emu); // Determinism require reset
+        reset_emulator(emu);
     }
 }
 
@@ -140,9 +140,9 @@ void tas_toggle_playback(Emulator* emu) {
 }
 
 void tas_toggle_slow_motion(Emulator* emu) {
-    if (emu->slow_motion_factor == 1.0f) emu->slow_motion_factor = 2.0f; // 50% speed
-    else if (emu->slow_motion_factor == 2.0f) emu->slow_motion_factor = 4.0f; // 25% speed
-    else emu->slow_motion_factor = 1.0f; // Normal speed
+    if (emu->slow_motion_factor == 1.0f) emu->slow_motion_factor = 2.0f;
+    else if (emu->slow_motion_factor == 2.0f) emu->slow_motion_factor = 4.0f;
+    else emu->slow_motion_factor = 1.0f;
     LOG(INFO, "TAS: Speed Factor %.1f (%.0f%%)", emu->slow_motion_factor, 100.0/emu->slow_motion_factor);
 }
 
@@ -151,14 +151,17 @@ void tas_step_frame(Emulator* emu) {
     emu->pause = 0; 
 }
 
-void tas_toggle_hitboxes(Emulator* emu) {
-    emu->show_hitboxes = !emu->show_hitboxes;
-    LOG(INFO, "TAS: Hitboxes %s", emu->show_hitboxes ? "ON" : "OFF");
+void tas_toggle_lua_script(Emulator* emu) {
+    // Tenta carregar o script padrão 'hitbox.lua'
+    lua_bridge_load_script(emu, "hitbox.lua");
+    LOG(INFO, "TAS: Reloaded Lua Script (hitbox.lua)");
 }
 
-// --- TAS IMPLEMENTATION END ---
-
-// --- Save/Load State Logic ---
+// --- Save/Load State (Resumido para clareza, mas essencial) ---
+typedef struct { uint32_t magic; uint32_t version; uint32_t padding; } SaveHeader;
+typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
+typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
+typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
 
 static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
     char* base_path = SDL_GetPrefPath("Barracoder", "AndroNES");
@@ -170,87 +173,52 @@ static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
     }
 }
 
-// Estruturas de Snapshot para salvar estado
-typedef struct { uint32_t magic; uint32_t version; uint32_t padding; } SaveHeader;
-typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
-typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
-typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
-
 void save_state(Emulator* emulator, const char* unused) {
     uint32_t now = SDL_GetTicks();
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
-
-    char full_path[1024];
-    get_slot_filename(emulator, full_path, sizeof(full_path));
-    LOG(INFO, "Saving state to: %s", full_path);
-
-    FILE* f = fopen(full_path, "wb");
-    if (!f) return;
-
+    char full_path[1024]; get_slot_filename(emulator, full_path, sizeof(full_path));
+    FILE* f = fopen(full_path, "wb"); if (!f) return;
     SaveHeader header = { .magic = SAVE_MAGIC, .version = SAVE_VERSION };
     fwrite(&header, sizeof(SaveHeader), 1, f);
-
     CPUSnapshot cpu_snap = { .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x, .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp, .t_cycles = emulator->cpu.t_cycles };
     fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
-
     PPUSnapshot ppu_snap;
-    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000);
-    memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256);
-    memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20);
+    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20);
     ppu_snap.ctrl = emulator->ppu.ctrl; ppu_snap.mask = emulator->ppu.mask; ppu_snap.status = emulator->ppu.status;
     ppu_snap.oam_address = emulator->ppu.oam_address; ppu_snap.v = emulator->ppu.v; ppu_snap.t = emulator->ppu.t; ppu_snap.x = emulator->ppu.x; ppu_snap.w = emulator->ppu.w; ppu_snap.buffer = emulator->ppu.buffer;
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
-
     fwrite(&emulator->apu, sizeof(APU), 1, f);
-
     Mapper* m = &emulator->mapper;
     MapperSnapshot map_snap = {0};
     map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0;
     map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0;
-    map_snap.mirroring = m->mirroring;
-    map_snap.ram_size = m->RAM_size;
+    map_snap.mirroring = m->mirroring; map_snap.ram_size = m->RAM_size;
     if (m->extension) { map_snap.has_extension = 1; memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); }
     fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
     if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
-
-    fclose(f);
-    LOG(INFO, "State Saved!");
+    fclose(f); LOG(INFO, "State Saved!");
 }
 
 void load_state(Emulator* emulator, const char* unused) {
     uint32_t now = SDL_GetTicks();
     if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
     last_state_action_time = now;
-
     SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
-    SDL_LockAudioStream(emulator->g_ctx.audio_stream);
-    SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
-    
-    char full_path[1024];
-    get_slot_filename(emulator, full_path, sizeof(full_path));
-    FILE* f = fopen(full_path, "rb");
-    if (!f) { SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream)); return; }
-
+    SDL_LockAudioStream(emulator->g_ctx.audio_stream); SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    char full_path[1024]; get_slot_filename(emulator, full_path, sizeof(full_path));
+    FILE* f = fopen(full_path, "rb"); if (!f) { SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream)); return; }
     SaveHeader header;
     if (fread(&header, sizeof(SaveHeader), 1, f) != 1 || header.magic != SAVE_MAGIC) { fclose(f); SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream)); return; }
-
     CPUSnapshot cpu_snap; fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
-
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
-
     PPUSnapshot ppu_snap; fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
     memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
     emulator->ppu.ctrl = ppu_snap.ctrl; emulator->ppu.mask = ppu_snap.mask; emulator->ppu.status = ppu_snap.status; emulator->ppu.oam_address = ppu_snap.oam_address;
     emulator->ppu.v = ppu_snap.v; emulator->ppu.t = ppu_snap.t; emulator->ppu.x = ppu_snap.x; emulator->ppu.w = ppu_snap.w; emulator->ppu.buffer = ppu_snap.buffer;
-
-    fread(&emulator->apu, sizeof(APU), 1, f);
-    emulator->apu.emulator = emulator;
-    emulator->apu.audio_start = 0; 
-    emulator->apu.sampler.index = 0;
-
+    fread(&emulator->apu, sizeof(APU), 1, f); emulator->apu.emulator = emulator; emulator->apu.audio_start = 0; emulator->apu.sampler.index = 0;
     MapperSnapshot map_snap; fread(&map_snap, sizeof(MapperSnapshot), 1, f);
     Mapper* m = &emulator->mapper;
     if (m->PRG_ROM) m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
@@ -258,11 +226,8 @@ void load_state(Emulator* emulator, const char* unused) {
     set_mirroring(m, map_snap.mirroring);
     if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
     if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
-
-    emulator->ppu.render = 1;
-    fclose(f);
-    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream);
-    SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    emulator->ppu.render = 1; fclose(f);
+    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
     LOG(INFO, "State Loaded!");
 }
 
@@ -271,15 +236,12 @@ void increment_save_slot(Emulator* emulator) {
     if(emulator->current_save_slot > 9) emulator->current_save_slot = 0;
 }
 
-// --- Menu Functions ---
 void init_menu_layout(int screen_w, int screen_h) {
     int btn_w = screen_w * 0.5; 
     int btn_h = screen_h * 0.08; 
     if (btn_h < 40) btn_h = 40;
-    
     int start_y = (screen_h - (MENU_COUNT * (btn_h + 10))) / 2;
     int center_x = (screen_w - btn_w) / 2;
-
     const char* labels[] = { "Resume", "Slot: 0", "Save State", "Load State", "Edit Controls", "Scanlines: Off", "Palette: Default", "Exit" };
     for(int i=0; i<MENU_COUNT; i++) {
         strncpy(menu_options[i].label, labels[i], 32);
@@ -294,7 +256,6 @@ void render_pause_menu(GraphicsContext* g_ctx) {
     SDL_RenderFillRect(g_ctx->renderer, NULL);
     SDL_Color txt = {255,255,255,255};
     SDL_Color bg = {60,60,60,255}, act = {100,60,60,255};
-
     for(int i=0; i<MENU_COUNT; i++) {
         if(i==4 && is_edit_mode()) SDL_SetRenderDrawColor(g_ctx->renderer, act.r, act.g, act.b, 255);
         else SDL_SetRenderDrawColor(g_ctx->renderer, bg.r, bg.g, bg.b, 255);
@@ -332,8 +293,6 @@ void handle_menu_touch(int x, int y, Emulator* emu) {
     }
 }
 
-// --- Main Init & Loop ---
-
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(argc < 2) quit(EXIT_FAILURE);
     memset(emulator, 0, sizeof(Emulator));
@@ -365,7 +324,7 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     init_timer(&emulator->timer, PERIOD);
     ANDROID_INIT_TOUCH_PAD(emulator);
     
-    // Inicializar TAS
+    // Inicializar TAS e Lua
     tas_init(emulator);
 
     if(!emulator->g_ctx.is_tv) init_menu_layout(emulator->g_ctx.screen_width, emulator->g_ctx.screen_height);
@@ -379,7 +338,6 @@ void run_emulator(struct Emulator* emulator){
     GraphicsContext *g=&emulator->g_ctx; Timer *tm=&emulator->timer;
     SDL_Event e; Timer ft;
     
-    // Período base para cálculo de slow motion
     uint64_t base_period_ns = PERIOD; 
     
     init_timer(&ft, base_period_ns); 
@@ -389,7 +347,6 @@ void run_emulator(struct Emulator* emulator){
     float fps=0.0f;
 
     while (!emulator->exit) {
-        // Reinicia timer para o frame atual
         mark_start(tm);
         
         while (SDL_PollEvent(&e)) {
@@ -397,7 +354,6 @@ void run_emulator(struct Emulator* emulator){
                 handle_menu_touch((int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height), emulator);
             }
             
-            // Só processa input real se não estiver reproduzindo filme TAS
             if (!emulator->is_playing) {
                 update_joypad(j1, &e); 
                 update_joypad(j2, &e);
@@ -406,7 +362,6 @@ void run_emulator(struct Emulator* emulator){
             if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) emulator->exit = 1;
             if(e.type == SDL_EVENT_KEY_DOWN && (e.key.key == SDLK_AC_BACK || e.key.scancode == SDL_SCANCODE_AC_BACK)) emulator->pause = !emulator->pause;
 
-            // Teclas de Atalho TAS (Desktop)
             if(e.type == SDL_EVENT_KEY_DOWN) {
                 switch(e.key.key) {
                     case SDLK_F1: tas_save_movie(emulator, "quick.tas"); break;
@@ -414,22 +369,19 @@ void run_emulator(struct Emulator* emulator){
                     case SDLK_F5: tas_toggle_recording(emulator); break;
                     case SDLK_F6: tas_toggle_playback(emulator); break;
                     case SDLK_F7: tas_toggle_slow_motion(emulator); break;
-                    case SDLK_F8: tas_toggle_hitboxes(emulator); break;
-                    case SDLK_P:  tas_step_frame(emulator); break; // Correção aplicada aqui
+                    case SDLK_F8: tas_toggle_lua_script(emulator); break; // Carrega script
+                    case SDLK_P:  tas_step_frame(emulator); break;
                 }
             }
         }
         
-        // Turbo Logic
         if(ppu->frames % TURBO_SKIP == 0 && !emulator->is_playing) { 
             turbo_trigger(j1); turbo_trigger(j2); 
         }
 
-        // --- GAME LOOP ---
-        // Executa se não estiver pausado OU se for um frame step (avanço quadro a quadro)
         if(!emulator->pause || emulator->step_frame){
             
-            // Lógica TAS: Gravação e Reprodução
+            // TAS Logic
             if (emulator->is_recording) {
                 if (emulator->current_frame_index < MAX_MOVIE_FRAMES) {
                     emulator->movie.frames[emulator->current_frame_index].joy1_status = j1->status;
@@ -437,7 +389,7 @@ void run_emulator(struct Emulator* emulator){
                     emulator->movie.frame_count = emulator->current_frame_index + 1;
                     emulator->current_frame_index++;
                 } else {
-                    tas_toggle_recording(emulator); // Limite atingido
+                    tas_toggle_recording(emulator);
                 }
             } else if (emulator->is_playing) {
                 if (emulator->current_frame_index < emulator->movie.frame_count) {
@@ -445,11 +397,13 @@ void run_emulator(struct Emulator* emulator){
                     j2->status = emulator->movie.frames[emulator->current_frame_index].joy2_status;
                     emulator->current_frame_index++;
                 } else {
-                    tas_toggle_playback(emulator); // Fim do filme
+                    tas_toggle_playback(emulator);
                 }
             }
 
-            // Emulação do Hardware
+            // Executa Lua (lê memória, desenha overlays, pausa no frameadvance)
+            lua_bridge_update(emulator);
+
             while(!ppu->render) {
                 execute_ppu(ppu); execute_ppu(ppu); execute_ppu(ppu);
                 if(emulator->type == PAL) {
@@ -458,38 +412,25 @@ void run_emulator(struct Emulator* emulator){
                 execute(cpu); execute_apu(apu);
             }
             
-            // Contagem de FPS
             frames++;
             if(SDL_GetTicks() > last_fps + 1000) { fps = frames / ((SDL_GetTicks()-last_fps)/1000.0f); last_fps=SDL_GetTicks(); frames=0; }
             
-            // --- RENDERIZAÇÃO ---
-            // 1. Atualiza textura base do jogo
-            render_graphics_update(g, ppu->screen, ppu->mask);
-            
-            // 2. Hitboxes (se ativado)
-            if (emulator->show_hitboxes) {
-                render_hitboxes(g, ppu);
-            }
-            
-            // 3. UI e Present
-            render_ui_and_present(g, fps);
+            // Renderização com camadas
+            render_graphics_update(g, ppu->screen, ppu->mask); // Base Game
+            lua_bridge_render(emulator, g); // Lua overlays (hitboxes)
+            render_ui_and_present(g, fps); // UI e Present
             
             ppu->render = 0;
             queue_audio(apu, g);
             
-            // Consome o step frame e pausa novamente
             if (emulator->step_frame) {
                 emulator->step_frame = 0;
                 emulator->pause = 1;
             }
 
-            // --- TIMING / SLOW MOTION ---
-            mark_end(tm);
+            mark_end(tm); 
             
-            // Espera o tempo base do frame
             adjusted_wait(tm);
-            
-            // Se Slow Motion ativo, espera tempo extra
             if (emulator->slow_motion_factor > 1.0f) {
                 double frame_ms = 1000.0 / (emulator->type==PAL?PAL_FRAME_RATE:NTSC_FRAME_RATE);
                 double extra_wait = frame_ms * (emulator->slow_motion_factor - 1.0);
@@ -497,7 +438,6 @@ void run_emulator(struct Emulator* emulator){
             }
 
         } else {
-            // Modo Pausa
             render_frame_only(g);
             render_pause_menu(g);
             SDL_RenderPresent(g->renderer);
@@ -517,130 +457,58 @@ void free_emulator(struct Emulator* emulator){
     exit_APU(); exit_ppu(&emulator->ppu); free_mapper(&emulator->mapper);
     ANDROID_FREE_TOUCH_PAD(); free_graphics(&emulator->g_ctx); release_timer(&emulator->timer);
     
-    // Libera memória TAS
     if(emulator->movie.frames) free(emulator->movie.frames);
+    lua_bridge_free(emulator); // Limpa Lua
 }
 
-// --- NSF Player ---
-
+// --- NSF Player (Original, mantido para compatibilidade) ---
 void run_NSF_player(struct Emulator* emulator) {
     LOG(INFO, "Starting NSF player...");
-    JoyPad* joy1 = &emulator->mem.joy1;
-    JoyPad* joy2 = &emulator->mem.joy2;
-    c6502* cpu = &emulator->cpu;
-    APU* apu = &emulator->apu;
-    NSF* nsf = emulator->mapper.NSF;
-    GraphicsContext* g_ctx = &emulator->g_ctx;
-    init_NSF_gfx(g_ctx, nsf);
-    Timer* timer = &emulator->timer;
-    SDL_Event e;
-    Timer frame_timer;
-    PERIOD = 1000 * emulator->mapper.NSF->speed;
-    double ms_per_frame = emulator->mapper.NSF->speed / 1000.0;
-    init_timer(&frame_timer, PERIOD);
-    mark_start(&frame_timer);
+    JoyPad* joy1 = &emulator->mem.joy1; JoyPad* joy2 = &emulator->mem.joy2;
+    c6502* cpu = &emulator->cpu; APU* apu = &emulator->apu; NSF* nsf = emulator->mapper.NSF;
+    GraphicsContext* g_ctx = &emulator->g_ctx; init_NSF_gfx(g_ctx, nsf);
+    Timer* timer = &emulator->timer; SDL_Event e; Timer frame_timer;
+    PERIOD = 1000 * emulator->mapper.NSF->speed; double ms_per_frame = emulator->mapper.NSF->speed / 1000.0;
+    init_timer(&frame_timer, PERIOD); mark_start(&frame_timer);
     size_t cycles_per_frame, nmi_cycle_start;
-    
-    if(emulator->type == PAL) {
-        cycles_per_frame = emulator->mapper.NSF->speed * 1.662607f;
-        nmi_cycle_start = cycles_per_frame - 7459;
-    }else {
-        cycles_per_frame = emulator->mapper.NSF->speed * 1.789773f;
-        nmi_cycle_start = cycles_per_frame - 2273;
-    }
-    
-    uint8_t status1 = 0, status2 = 0;
-    init_song(emulator, nsf->current_song);
-
+    if(emulator->type == PAL) { cycles_per_frame = emulator->mapper.NSF->speed * 1.662607f; nmi_cycle_start = cycles_per_frame - 7459; }
+    else { cycles_per_frame = emulator->mapper.NSF->speed * 1.789773f; nmi_cycle_start = cycles_per_frame - 2273; }
+    uint8_t status1 = 0, status2 = 0; init_song(emulator, nsf->current_song);
     while (!emulator->exit) {
         mark_start(timer);
         while (SDL_PollEvent(&e)) {
-            update_joypad(joy1, &e);
-            update_joypad(joy2, &e);
-            if((status1 & RIGHT && !(joy1->status & RIGHT)) || (status2 & RIGHT && !(joy2->status & RIGHT))) {
-                next_song(emulator, nsf);
-            } else if((status1 & LEFT && !(joy1->status & LEFT)) || (status2 & LEFT && !(joy2->status & LEFT))) {
-                prev_song(emulator, nsf);
-            } else if((status1 & START && !(joy1->status & START)) || (status2 & START && !(joy2->status & START))) {
-                emulator->pause ^= 1;
-            }
-            status1 = joy1->status;
-            status2 = joy2->status;
-            if((joy1->status & 0xc) == 0xc || (joy2->status & 0xc) == 0xc) {
-                reset_emulator(emulator);
-                nsf->current_song = 1;
-                init_song(emulator, nsf->current_song);
-            }
-
-            if(e.type == SDL_EVENT_QUIT) emulator->exit = 1;
-            if(e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_AC_BACK) emulator->exit = 1;
+            update_joypad(joy1, &e); update_joypad(joy2, &e);
+            if((status1 & RIGHT && !(joy1->status & RIGHT)) || (status2 & RIGHT && !(joy2->status & RIGHT))) next_song(emulator, nsf);
+            else if((status1 & LEFT && !(joy1->status & LEFT)) || (status2 & LEFT && !(joy2->status & LEFT))) prev_song(emulator, nsf);
+            else if((status1 & START && !(joy1->status & START)) || (status2 & START && !(joy2->status & START))) emulator->pause ^= 1;
+            status1 = joy1->status; status2 = joy2->status;
+            if((joy1->status & 0xc) == 0xc || (joy2->status & 0xc) == 0xc) { reset_emulator(emulator); nsf->current_song = 1; init_song(emulator, nsf->current_song); }
+            if(e.type == SDL_EVENT_QUIT) emulator->exit = 1; if(e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_AC_BACK) emulator->exit = 1;
         }
-
         if(nsf->times != NULL && !nsf->initializing) {
             double track_dur = nsf->times[nsf->current_song == 0 ? 0 : nsf->current_song - 1];
             if(track_dur < nsf->tick) {
-                if(nsf->tick_max < nsf->tick) {
-                    next_song(emulator, nsf);
-                } else if(nsf->fade != NULL) {
-                    int fade_dur = nsf->fade[nsf->current_song == 0 ? 0 : nsf->current_song - 1];
-                    apu->volume = (nsf->tick - track_dur) / (float)fade_dur;
-                    apu->volume = 1 - (apu->volume < 0 ? 0 : apu->volume > 1 ? 1 : apu->volume);
-                }
+                if(nsf->tick_max < nsf->tick) next_song(emulator, nsf);
+                else if(nsf->fade != NULL) { int fade_dur = nsf->fade[nsf->current_song == 0 ? 0 : nsf->current_song - 1]; apu->volume = (nsf->tick - track_dur) / (float)fade_dur; apu->volume = 1 - (apu->volume < 0 ? 0 : apu->volume > 1 ? 1 : apu->volume); }
             }
         }
-
         if(!emulator->pause){
-            if ((nsf->flags & (NSF_NO_PLAY_SR | NSF_NON_RETURN_INIT)) == 0) {
-                run_cpu_subroutine(cpu, nsf->play_addr);
-            }
-
+            if ((nsf->flags & (NSF_NO_PLAY_SR | NSF_NON_RETURN_INIT)) == 0) run_cpu_subroutine(cpu, nsf->play_addr);
             size_t cycles = 0;
             while (cycles < cycles_per_frame) {
                 execute(cpu);
-                if (!(cpu->mode & CPU_SR_ANY)) {
-                    if (nsf->flags & NSF_NON_RETURN_INIT && nsf->init_num == 0) {
-                        if (run_cpu_subroutine(cpu, nsf->init_addr) == 0) {
-                            cpu->ac = nsf->current_song > 0? nsf->current_song - 1: 0;
-                            cpu->x = emulator->type == PAL? 1: 0;
-                            cpu->y = 0x81;
-                            nsf->init_num = 1;
-                        }
-                    }
-                }
-                if (nsf->flags & NSF_IRQ)
-                    nsf_execute(emulator);
-                if(!nsf->initializing) {
-                    execute_apu(apu);
-                }
-                if (cycles == nmi_cycle_start) {
-                    if ((nsf->flags & (NSF_NON_RETURN_INIT|NSF_NO_PLAY_SR)) == NSF_NON_RETURN_INIT) {
-                        interrupt(cpu, NMI);
-                    }
-                }
+                if (!(cpu->mode & CPU_SR_ANY)) { if (nsf->flags & NSF_NON_RETURN_INIT && nsf->init_num == 0) { if (run_cpu_subroutine(cpu, nsf->init_addr) == 0) { cpu->ac = nsf->current_song > 0? nsf->current_song - 1: 0; cpu->x = emulator->type == PAL? 1: 0; cpu->y = 0x81; nsf->init_num = 1; } } }
+                if (nsf->flags & NSF_IRQ) nsf_execute(emulator);
+                if(!nsf->initializing) execute_apu(apu);
+                if (cycles == nmi_cycle_start) { if ((nsf->flags & (NSF_NON_RETURN_INIT|NSF_NO_PLAY_SR)) == NSF_NON_RETURN_INIT) interrupt(cpu, NMI); }
                 cycles++;
             }
-
-            if ((nsf->flags & (NSF_NON_RETURN_INIT|NSF_NO_PLAY_SR)) == NSF_NON_RETURN_INIT) {
-                interrupt_clear(cpu, NMI);
-            }
-
+            if ((nsf->flags & (NSF_NON_RETURN_INIT|NSF_NO_PLAY_SR)) == NSF_NON_RETURN_INIT) interrupt_clear(cpu, NMI);
             render_NSF_graphics(emulator, nsf);
-            if(!nsf->initializing) {
-                queue_audio(apu, g_ctx);
-                nsf->tick += ms_per_frame;
-            }
-            if((cpu->sub_address == nsf->play_addr || nsf->init_num == 1) && nsf->initializing) {
-                nsf->initializing = 0;
-                nsf->tick = 0;
-            }
-            mark_end(timer);
-            adjusted_wait(timer);
-        }else{
-            wait(IDLE_SLEEP);
-        }
+            if(!nsf->initializing) { queue_audio(apu, g_ctx); nsf->tick += ms_per_frame; }
+            if((cpu->sub_address == nsf->play_addr || nsf->init_num == 1) && nsf->initializing) { nsf->initializing = 0; nsf->tick = 0; }
+            mark_end(timer); adjusted_wait(timer);
+        }else{ wait(IDLE_SLEEP); }
     }
-
-    mark_end(&frame_timer);
-    emulator->time_diff = get_diff_ms(&frame_timer);
-    release_timer(&frame_timer);
+    mark_end(&frame_timer); emulator->time_diff = get_diff_ms(&frame_timer); release_timer(&frame_timer);
 }
