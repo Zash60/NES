@@ -1,93 +1,92 @@
-cmake_minimum_required(VERSION 3.16)
-project(nes)
+cmake_minimum_required(VERSION 3.22.1)
 
-set(CMAKE_C_STANDARD 11)
-set(BUILD_DIR build)
+project(nes C)
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  add_compile_definitions(DEBUGGING_ENABLED)
-endif()
+# --- Configuração de Diretórios ---
+set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(LUA_DIR ${SRC_DIR}/lua)
+set(EXTERNAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external)
 
-if(MSVC)
-  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-endif()
+# --- SDL3 Setup ---
+# Assume que você tem o SDL3 clonado em external/SDL
+add_subdirectory(${EXTERNAL_DIR}/SDL)
 
-set(SDL_DIR ${CMAKE_SOURCE_DIR}/external/SDL)
-set(SDL_ttf_DIR ${CMAKE_SOURCE_DIR}/external/SDL_ttf)
-option(TTF_WITH_HARFBUZZ "use harfbuzz to improve text shaping" ON)
+# --- SDL3_ttf Setup ---
+# Assume que você tem o SDL_ttf clonado em external/SDL_ttf
+add_subdirectory(${EXTERNAL_DIR}/SDL_ttf)
 
-IF(ANDROID)
-  # This is the built in NDK logging library
-  find_library(log-lib log)
-  option(BUILD_STATIC_LIBS "Build static libraries" OFF)
-  option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-ELSE()
-  option(BUILD_STATIC_LIBS "Build static libraries" ON)
-  option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
-ENDIF()
-
-add_subdirectory(${SDL_DIR})
-add_subdirectory(${SDL_ttf_DIR})
-
-set (SRC
-        src/apu.c
-        src/controller.c
-        src/cpu6502.c
-        src/debugtools.c
-        src/emulator.c
-        src/gamepad.c
-        src/genie.c
-        src/gfx.c
-        src/mmu.c
-        src/ppu.c
-        src/timers.c
-        src/trace.c
-        src/touchpad.c
-        src/trace.c
-        src/utils.c
-        src/main.c
-
-        src/mappers/axrom.c
-        src/mappers/cnrom.c
-        src/mappers/gnrom.c
-        src/mappers/mapper.c
-        src/mappers/mmc1.c
-        src/mappers/uxrom.c
-        src/mappers/mmc3.c
-        src/mappers/colordreams.c
-        src/nsf.c
-        src/biquad.c
-        src/biquad.h
-        src/font.h
+# --- Lua Setup (Compilando da fonte) ---
+# Excluímos lua.c e luac.c pois eles contêm funções main() que conflitam
+file(GLOB LUA_SOURCES 
+    "${LUA_DIR}/*.c"
 )
-include_directories(src src/mappers ${SDL_DIR}/include/SDL3 ${SDL_DIR}/include ${SDL_ttf_DIR}/include/SDL3_ttf)
+list(REMOVE_ITEM LUA_SOURCES 
+    "${LUA_DIR}/lua.c" 
+    "${LUA_DIR}/luac.c"
+)
 
+# Cria a biblioteca estática do Lua
+add_library(lua STATIC ${LUA_SOURCES})
+target_include_directories(lua PUBLIC ${LUA_DIR})
 
-IF(ANDROID)
-  add_library(
-          nes
-          SHARED
-          ${SRC}
-  )
-  target_link_libraries(
-          nes
-          SDL3::SDL3-shared
-          SDL3_ttf::SDL3_ttf-shared
-          ${log-lib}
-  )
-ELSE()
-  IF(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release")
-    enable_language("RC")
-    set (WIN32_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/app.rc)
-    add_executable(nes WIN32 ${SRC} ${WIN32_RESOURCES})
-  ELSE()
-    add_executable(nes ${SRC})
-  ENDIF ()
-  target_link_libraries(nes SDL3::SDL3-static SDL3_ttf::SDL3_ttf-static)
-ENDIF()
+# Adiciona a flag para compilar como C Linux/Android padrão
+target_compile_definitions(lua PRIVATE LUA_USE_LINUX)
 
-IF (NOT WIN32)
-  target_link_libraries(nes m)
-ELSE()
-  target_link_libraries(nes winmm.lib)
-ENDIF()
+# --- NES Emulator Setup ---
+
+# Lista todos os seus arquivos fonte
+set(NES_SOURCES
+    ${SRC_DIR}/main.c
+    ${SRC_DIR}/emulator.c
+    ${SRC_DIR}/cpu6502.c
+    ${SRC_DIR}/ppu.c
+    ${SRC_DIR}/apu.c
+    ${SRC_DIR}/mmu.c
+    ${SRC_DIR}/mappers/mapper.c
+    ${SRC_DIR}/mappers/uxrom.c
+    ${SRC_DIR}/mappers/mmc1.c
+    ${SRC_DIR}/mappers/cnrom.c
+    ${SRC_DIR}/mappers/gnrom.c
+    ${SRC_DIR}/mappers/axrom.c
+    ${SRC_DIR}/mappers/mmc3.c
+    ${SRC_DIR}/mappers/colordreams.c
+    ${SRC_DIR}/controller.c
+    ${SRC_DIR}/gamepad.c
+    ${SRC_DIR}/gfx.c
+    ${SRC_DIR}/timers.c
+    ${SRC_DIR}/utils.c
+    ${SRC_DIR}/nsf.c
+    ${SRC_DIR}/genie.c
+    ${SRC_DIR}/debugtools.c
+    ${SRC_DIR}/biquad.c
+    # Novos arquivos TAS
+    ${SRC_DIR}/touchpad.c
+    ${SRC_DIR}/lua_bridge.c
+)
+
+# Cria a biblioteca compartilhada (libnes.so ou libmain.so)
+add_library(main SHARED ${NES_SOURCES})
+
+# --- Include Directories ---
+target_include_directories(main PRIVATE
+    ${SRC_DIR}
+    ${SRC_DIR}/mappers
+    ${LUA_DIR} # Importante para lua_bridge.c encontrar lua.h
+)
+
+# --- Definições de Compilação ---
+target_compile_definitions(main PRIVATE 
+    ANDROID 
+    DEBUGGING_ENABLED
+)
+
+# --- Linkagem ---
+# Linka SDL3, SDL3_ttf, Lua e bibliotecas do Android (log, android)
+target_link_libraries(main PRIVATE
+    SDL3::SDL3
+    SDL3_ttf::SDL3_ttf
+    lua
+    android
+    log
+    m # Math library
+)
