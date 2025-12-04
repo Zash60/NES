@@ -3,25 +3,20 @@ cmake_minimum_required(VERSION 3.22.1)
 project(nes C)
 
 # --- Configuração de Diretórios ---
-# Define onde estão os códigos fonte
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(LUA_DIR ${SRC_DIR}/lua)
 set(EXTERNAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external)
 
 # --- SDL3 Setup ---
-# Adiciona o SDL3 que deve estar em external/SDL
 add_subdirectory(${EXTERNAL_DIR}/SDL)
 
 # --- SDL3_ttf Setup ---
-# Adiciona o SDL3_ttf que deve estar em external/SDL_ttf
 add_subdirectory(${EXTERNAL_DIR}/SDL_ttf)
 
 # --- Lua Setup ---
-# Compila o Lua estaticamente a partir da pasta src/lua
 file(GLOB LUA_SOURCES 
     "${LUA_DIR}/*.c"
 )
-# Remove arquivos que contêm 'main' conflitantes
 list(REMOVE_ITEM LUA_SOURCES 
     "${LUA_DIR}/lua.c" 
     "${LUA_DIR}/luac.c"
@@ -33,7 +28,6 @@ target_compile_definitions(lua PRIVATE LUA_USE_LINUX)
 
 # --- NES Emulator Setup ---
 
-# Lista de todos os arquivos fonte do emulador
 set(NES_SOURCES
     ${SRC_DIR}/main.c
     ${SRC_DIR}/emulator.c
@@ -62,23 +56,24 @@ set(NES_SOURCES
     ${SRC_DIR}/lua_bridge.c
 )
 
-# Cria a biblioteca compartilhada (libnes.so / libmain.so)
 add_library(main SHARED ${NES_SOURCES})
 
-# Define onde encontrar os headers (.h)
+# --- Include Directories (UPDATED) ---
 target_include_directories(main PRIVATE
     ${SRC_DIR}
     ${SRC_DIR}/mappers
     ${LUA_DIR}
+    ${EXTERNAL_DIR}/SDL/include      # Fix for 'SDL.h' not found
+    ${EXTERNAL_DIR}/SDL_ttf/include  # Fix for 'SDL_ttf.h' not found
 )
 
-# Definições de pré-processador
+# --- Definições de Compilação ---
 target_compile_definitions(main PRIVATE 
     ANDROID 
     DEBUGGING_ENABLED
 )
 
-# Linka as bibliotecas necessárias
+# --- Linkagem ---
 target_link_libraries(main PRIVATE
     SDL3::SDL3
     SDL3_ttf::SDL3_ttf
