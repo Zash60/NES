@@ -3,38 +3,37 @@ cmake_minimum_required(VERSION 3.22.1)
 project(nes C)
 
 # --- Configuração de Diretórios ---
+# Define onde estão os códigos fonte
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(LUA_DIR ${SRC_DIR}/lua)
 set(EXTERNAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external)
 
 # --- SDL3 Setup ---
-# Assume que você tem o SDL3 clonado em external/SDL
+# Adiciona o SDL3 que deve estar em external/SDL
 add_subdirectory(${EXTERNAL_DIR}/SDL)
 
 # --- SDL3_ttf Setup ---
-# Assume que você tem o SDL_ttf clonado em external/SDL_ttf
+# Adiciona o SDL3_ttf que deve estar em external/SDL_ttf
 add_subdirectory(${EXTERNAL_DIR}/SDL_ttf)
 
-# --- Lua Setup (Compilando da fonte) ---
-# Excluímos lua.c e luac.c pois eles contêm funções main() que conflitam
+# --- Lua Setup ---
+# Compila o Lua estaticamente a partir da pasta src/lua
 file(GLOB LUA_SOURCES 
     "${LUA_DIR}/*.c"
 )
+# Remove arquivos que contêm 'main' conflitantes
 list(REMOVE_ITEM LUA_SOURCES 
     "${LUA_DIR}/lua.c" 
     "${LUA_DIR}/luac.c"
 )
 
-# Cria a biblioteca estática do Lua
 add_library(lua STATIC ${LUA_SOURCES})
 target_include_directories(lua PUBLIC ${LUA_DIR})
-
-# Adiciona a flag para compilar como C Linux/Android padrão
 target_compile_definitions(lua PRIVATE LUA_USE_LINUX)
 
 # --- NES Emulator Setup ---
 
-# Lista todos os seus arquivos fonte
+# Lista de todos os arquivos fonte do emulador
 set(NES_SOURCES
     ${SRC_DIR}/main.c
     ${SRC_DIR}/emulator.c
@@ -59,34 +58,32 @@ set(NES_SOURCES
     ${SRC_DIR}/genie.c
     ${SRC_DIR}/debugtools.c
     ${SRC_DIR}/biquad.c
-    # Novos arquivos TAS
     ${SRC_DIR}/touchpad.c
     ${SRC_DIR}/lua_bridge.c
 )
 
-# Cria a biblioteca compartilhada (libnes.so ou libmain.so)
+# Cria a biblioteca compartilhada (libnes.so / libmain.so)
 add_library(main SHARED ${NES_SOURCES})
 
-# --- Include Directories ---
+# Define onde encontrar os headers (.h)
 target_include_directories(main PRIVATE
     ${SRC_DIR}
     ${SRC_DIR}/mappers
-    ${LUA_DIR} # Importante para lua_bridge.c encontrar lua.h
+    ${LUA_DIR}
 )
 
-# --- Definições de Compilação ---
+# Definições de pré-processador
 target_compile_definitions(main PRIVATE 
     ANDROID 
     DEBUGGING_ENABLED
 )
 
-# --- Linkagem ---
-# Linka SDL3, SDL3_ttf, Lua e bibliotecas do Android (log, android)
+# Linka as bibliotecas necessárias
 target_link_libraries(main PRIVATE
     SDL3::SDL3
     SDL3_ttf::SDL3_ttf
     lua
     android
     log
-    m # Math library
+    m
 )
