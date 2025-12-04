@@ -5,7 +5,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
-import android.widget.TextView; // Importante: TextView se usar o layout novo, ou LinearLayout se usar o antigo
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -21,9 +21,7 @@ public class MainActivity extends AppCompatActivity {
     ArrayList<NESItemModel> list;
     RecyclerView recyclerView;
     NESItemAdapter adapter;
-    // Se usar o layout XML anterior que enviei, o ID era emptyStateText (TextView) ou emptyStateLayout (LinearLayout)
-    // Vou assumir o TextView do último XML enviado.
-    View emptyState; 
+    View emptyState; // Usamos View genérico para aceitar TextView ou Layout
     private static final String TAG = "MainActivity";
 
     @Override
@@ -33,9 +31,13 @@ public class MainActivity extends AppCompatActivity {
         
         recyclerView = findViewById(R.id.NESRecyclerView);
         
-        // Tenta encontrar o view de estado vazio (pode ser TextView ou Layout dependendo do XML usado)
+        // CORREÇÃO: Usar apenas o ID definido no activity_main.xml atual
+        // Se você copiou o XML anterior, o ID é emptyStateText
         emptyState = findViewById(R.id.emptyStateText); 
-        if (emptyState == null) emptyState = findViewById(R.id.emptyStateLayout);
+        
+        // Fallback de segurança: se emptyStateText for nulo (caso esteja usando um XML antigo), 
+        // não tentamos buscar outro ID inexistente para evitar erro de compilação.
+        // Em vez disso, verificamos se é nulo antes de usar.
 
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
         
@@ -61,7 +63,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         
-        // Opcional: Carregar de Assets se houver
         try {
             String[] assets = getAssets().list("roms");
             if(assets != null) {
@@ -94,7 +95,7 @@ public class MainActivity extends AppCompatActivity {
     private void importRom(Uri uri) {
         try {
             String fileName = "game_" + System.currentTimeMillis() + ".nes";
-            // Tentar obter nome real (simplificado)
+            // Tenta pegar o nome real
             android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null);
             if (cursor != null && cursor.moveToFirst()) {
                 int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
