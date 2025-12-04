@@ -139,20 +139,26 @@ static void init_axis(GraphicsContext* ctx, int x, int y){
     axis->r = (int)(0.09 * ctx->screen_height);
     axis->x = axis->inner_x = axis->origin_x = x;
     axis->y = axis->inner_y = axis->origin_y = y;
+
     int bg_r = axis->r + 30;
     axis->bg_dest.x = axis->x - bg_r; axis->bg_dest.y = axis->y - bg_r;
     axis->bg_dest.w = axis->bg_dest.h = bg_r * 2;
     axis->joy_dest.w = axis->joy_dest.h = axis->r * 2;
+
     axis->bg_tx = SDL_CreateTexture(ctx->renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, bg_r * 2, bg_r * 2);
     axis->joy_tx = SDL_CreateTexture(ctx->renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, axis->r * 2, axis->r * 2);
+    
     SDL_SetTextureBlendMode(axis->bg_tx, SDL_BLENDMODE_BLEND);
     SDL_SetTextureBlendMode(axis->joy_tx, SDL_BLENDMODE_BLEND);
+    
     SDL_SetRenderTarget(ctx->renderer, axis->bg_tx);
     SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 50);
     SDL_RenderDrawCircle(ctx->renderer, bg_r, bg_r, bg_r - 2);
+    
     SDL_SetRenderTarget(ctx->renderer, axis->joy_tx);
     SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 180);
     SDL_RenderFillCircle(ctx->renderer, axis->r, axis->r, axis->r - 2);
+    
     SDL_SetRenderTarget(ctx->renderer, NULL);
 }
 
@@ -194,7 +200,6 @@ void render_touch_controls(GraphicsContext* ctx){
             else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
         }
         else if (button->id == BTN_ID_TAS_BOX) {
-            // CORREÇÃO: Usar lua_script_active em vez de show_hitboxes
             if (touch_pad.emulator->lua_script_active) SDL_SetTextureColorMod(button->texture, 255, 0, 255);
             else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
         }
@@ -288,7 +293,8 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                         tas_step_frame(touch_pad.emulator);
                     }
                     else if (btn->id == BTN_ID_TAS_BOX) {
-                        tas_toggle_lua_script(touch_pad.emulator);
+                        // CORREÇÃO AQUI: Use o nome correto da função definida no header
+                        tas_open_script_selector(touch_pad.emulator);
                     }
                     else if (!touch_pad.emulator->pause) {
                         key |= btn->id;
