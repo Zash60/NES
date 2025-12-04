@@ -4,7 +4,7 @@
 #include "utils.h"
 #include "font.h"
 #include "ppu.h" 
-#include "emulator.h" // Incluído para a função render_tas_osd
+#include "emulator.h"
 
 #ifdef __ANDROID__
 #include "touchpad.h"
@@ -12,7 +12,7 @@
 
 int video_filter_mode = 0; 
 
-// Protótipos para funções estáticas (locais a este arquivo)
+// Protótipos
 static void render_fps_text(GraphicsContext* ctx, float fps);
 static void render_scanlines(GraphicsContext* g_ctx);
 static void apply_masking(GraphicsContext* g_ctx, uint8_t mask_reg);
@@ -23,7 +23,8 @@ void get_graphics_context(GraphicsContext* ctx){
     TTF_Init();
 #ifdef __ANDROID__
     ctx->font = TTF_OpenFont("asap.ttf", (int)(ctx->screen_height * 0.05));
-    if(ctx->font == NULL) LOG(WARN, "Font not found: %s", TTF_GetError());
+    // CORREÇÃO AQUI: Usa SDL_GetError() em vez de TTF_GetError()
+    if(ctx->font == NULL) LOG(WARN, "Font not found: %s", SDL_GetError());
     
     SDL_SetHint(SDL_HINT_ANDROID_ALLOW_RECREATE_ACTIVITY, "1");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
@@ -32,7 +33,8 @@ void get_graphics_context(GraphicsContext* ctx){
 #else
     SDL_IOStream* rw = SDL_IOFromMem(font_data, sizeof(font_data));
     ctx->font = TTF_OpenFontIO(rw, 1, 20);
-    if(ctx->font == NULL) LOG(WARN, "Font not loaded from memory: %s", TTF_GetError());
+    // CORREÇÃO AQUI: Usa SDL_GetError() em vez de TTF_GetError()
+    if(ctx->font == NULL) LOG(WARN, "Font not loaded from memory: %s", SDL_GetError());
     ctx->window = SDL_CreateWindow("NES Emulator", ctx->width * (int)ctx->scale, ctx->height * (int)ctx->scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
 #endif
 
@@ -63,7 +65,8 @@ void get_graphics_context(GraphicsContext* ctx){
     SDL_RenderPresent(ctx->renderer);
 }
 
-// 1. Atualiza a textura com os pixels do emulador (desenha o jogo)
+// ... o resto do arquivo gfx.c permanece igual ...
+
 void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint8_t mask_reg){
     SDL_RenderClear(g_ctx->renderer);
     SDL_UpdateTexture(g_ctx->texture, NULL, buffer, g_ctx->width * sizeof(uint32_t));
@@ -76,7 +79,6 @@ void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint
 #endif
 }
 
-// 2. Desenha UI (Overlays) e finaliza o frame
 void render_ui_and_present(GraphicsContext* g_ctx, float fps, Emulator* emu) {
     if(video_filter_mode == 1) render_scanlines(g_ctx);
 
@@ -91,7 +93,6 @@ void render_ui_and_present(GraphicsContext* g_ctx, float fps, Emulator* emu) {
     SDL_RenderPresent(g_ctx->renderer);
 }
 
-// Renderiza apenas o frame atual (para o menu de pausa)
 void render_frame_only(GraphicsContext* g_ctx) {
     SDL_RenderClear(g_ctx->renderer);
 #ifdef __ANDROID__
