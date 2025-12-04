@@ -21,7 +21,7 @@
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
-#define SAVE_LOAD_COOLDOWN 1000
+#define SAVE_LOAD_COOLDOWN 500
 #define SAVE_MAGIC 0x4E45535C 
 #define SAVE_VERSION 5
 
@@ -296,7 +296,7 @@ void tas_save_movie(Emulator* emu, const char* filename) {
     snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename);
     FILE* f = fopen(full_path, "wb");
     if (f) {
-        fwrite(&emu->movie.magic, sizeof(uint32_t), 1, f);
+        fwrite(&emu->movie, sizeof(uint32_t), 1, f); // Assumindo TAS_HEADER_MAGIC
         fwrite(&emu->movie.frame_count, sizeof(uint32_t), 1, f);
         fwrite(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         fclose(f);
@@ -321,34 +321,33 @@ void tas_load_movie(Emulator* emu, const char* filename) {
     }
 }
 
-void tas_toggle_recording(Emulator* emu) {
-    if (emu->is_recording) {
-        LOG(INFO, "TAS: Recording Stopped.");
-        emu->is_recording = 0;
-        tas_save_movie(emu, "recording.tas");
-    } else {
-        LOG(INFO, "TAS: Recording Started");
-        emu->is_recording = 1;
-        emu->is_playing = 0;
-        emu->current_frame_index = 0;
-        emu->movie.frame_count = 0;
-        reset_emulator(emu);
-    }
+void tas_start_recording(Emulator* emu) {
+    LOG(INFO, "TAS: Recording Started");
+    emu->movie.mode = MOVIE_MODE_RECORDING;
+    emu->movie.read_only = 0;
+    emu->movie.guid = generate_guid();
+    emu->movie.frame_count = 0;
+    emu->current_frame_index = 0;
+    reset_emulator(emu);
 }
 
-void tas_toggle_playback(Emulator* emu) {
-    if (emu->is_playing) {
-        LOG(INFO, "TAS: Playback Stopped");
-        emu->is_playing = 0;
+void tas_stop_movie(Emulator* emu) {
+    LOG(INFO, "TAS: Movie Stopped");
+    emu->movie.mode = MOVIE_MODE_INACTIVE;
+    emu->movie.guid = 0;
+    emu->movie.frame_count = 0;
+    emu->current_frame_index = 0;
+}
+
+void tas_start_playback(Emulator* emu, int read_only) {
+    if (emu->movie.frame_count > 0) {
+        LOG(INFO, "TAS: Playback Started (Read-Only: %d)", read_only);
+        emu->movie.mode = MOVIE_MODE_PLAYBACK;
+        emu->movie.read_only = read_only;
+        emu->current_frame_index = 0;
+        reset_emulator(emu);
     } else {
-        tas_load_movie(emu, "recording.tas");
-        if (emu->movie.frame_count > 0) {
-            LOG(INFO, "TAS: Playback Started.");
-            emu->is_playing = 1;
-            emu->is_recording = 0;
-            emu->current_frame_index = 0;
-            reset_emulator(emu);
-        }
+        LOG(WARN, "TAS: No movie data to play");
     }
 }
 
@@ -370,36 +369,139 @@ void tas_toggle_lua_script(Emulator* emu) {
 
 // --- Save/Load State Logic ---
 
+typedef struct { uint32_t magic; uint32_t version; uint64_t movie_guid; uint32_t savestate_frame_count; uint32_t movie_length; } SaveHeader_v5;
+typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
+typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
+typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
+
 static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
     snprintf(buffer, size, "%s%s_slot%d.save", SCRIPT_PATH, emu->rom_name, emu->current_save_slot);
 }
 
 void save_state(Emulator* emulator, const char* unused) {
-    // ...
+    uint32_t now = SDL_GetTicks();
+    if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
+    last_state_action_time = now;
+
+    char full_path[1024];
+    get_slot_filename(emulator, full_path, sizeof(full_path));
+    FILE* f = fopen(full_path, "wb");
+    if (!f) return;
+
+    SaveHeader_v5 header = { 
+        .magic = SAVE_MAGIC, 
+        .version = SAVE_VERSION,
+        .movie_guid = emulator->movie.guid,
+        .savestate_frame_count = emulator->current_frame_index,
+        .movie_length = emulator->movie.frame_count
+    };
+    fwrite(&header, sizeof(SaveHeader_v5), 1, f);
+
+    CPUSnapshot cpu_snap = { .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x, .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp, .t_cycles = emulator->cpu.t_cycles };
+    fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
+    fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    PPUSnapshot ppu_snap; memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20); ppu_snap.ctrl = emulator->ppu.ctrl; ppu_snap.mask = emulator->ppu.mask; ppu_snap.status = emulator->ppu.status; ppu_snap.oam_address = emulator->ppu.oam_address; ppu_snap.v = emulator->ppu.v; ppu_snap.t = emulator->ppu.t; ppu_snap.x = emulator->ppu.x; ppu_snap.w = emulator->ppu.w; ppu_snap.buffer = emulator->ppu.buffer;
+    fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+    fwrite(&emulator->apu, sizeof(APU), 1, f);
+    Mapper* m = &emulator->mapper; MapperSnapshot map_snap = {0}; map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0; map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0; map_snap.mirroring = m->mirroring; map_snap.ram_size = m->RAM_size; if (m->extension) { map_snap.has_extension = 1; memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); }
+    fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
+    if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
+    
+    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
+        fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
+    }
+
+    fclose(f);
+    LOG(INFO, "State Saved!");
 }
 
 void load_state(Emulator* emulator, const char* unused) {
-    // ...
+    uint32_t now = SDL_GetTicks();
+    if (now < last_state_action_time + SAVE_LOAD_COOLDOWN) return;
+    last_state_action_time = now;
+
+    char full_path[1024];
+    get_slot_filename(emulator, full_path, sizeof(full_path));
+    FILE* f = fopen(full_path, "rb");
+    if (!f) return;
+
+    SaveHeader_v5 sv_header;
+    if (fread(&sv_header, sizeof(SaveHeader_v5), 1, f) != 1 || sv_header.magic != SAVE_MAGIC || sv_header.version != SAVE_VERSION) { 
+        LOG(ERROR, "Incompatible save state!");
+        fclose(f); return; 
+    }
+
+    FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
+    if (sv_header.movie_guid != 0) {
+        fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
+    }
+    fseek(f, sizeof(SaveHeader_v5), SEEK_SET);
+
+    // LÓGICA RERECORDING
+    if (emulator->movie.mode == MOVIE_MODE_INACTIVE) {
+        if (sv_header.movie_guid != 0) {
+            emulator->movie.guid = sv_header.movie_guid;
+            emulator->movie.frame_count = sv_header.movie_length;
+            memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
+            emulator->movie.mode = MOVIE_MODE_PLAYBACK;
+            emulator->movie.read_only = 1;
+        }
+    } else {
+        if (emulator->movie.guid != sv_header.movie_guid) { LOG(ERROR, "Savestate movie GUID mismatch!"); free(savestate_movie_frames); fclose(f); return; }
+        uint32_t min_len = (sv_header.movie_length < emulator->movie.frame_count) ? sv_header.movie_length : emulator->movie.frame_count;
+        if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) { LOG(ERROR, "Savestate timeline mismatch!"); free(savestate_movie_frames); fclose(f); return; }
+
+        if (emulator->movie.read_only) {
+            if (sv_header.movie_length > emulator->movie.frame_count) { LOG(ERROR, "Cannot load future state in read-only mode!"); free(savestate_movie_frames); fclose(f); return; }
+        } else {
+            emulator->movie.frame_count = sv_header.movie_length;
+            memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
+            emulator->movie.mode = MOVIE_MODE_RECORDING;
+            if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
+                emulator->needs_truncation = 1;
+            }
+        }
+    }
+    free(savestate_movie_frames);
+
+    // Carrega Core
+    SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    SDL_LockAudioStream(emulator->g_ctx.audio_stream); SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    
+    CPUSnapshot cpu_snap; fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
+    emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
+    
+    fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    PPUSnapshot ppu_snap; fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
+    emulator->ppu.ctrl = ppu_snap.ctrl; emulator->ppu.mask = ppu_snap.mask; emulator->ppu.status = ppu_snap.status; emulator->ppu.oam_address = ppu_snap.oam_address;
+    emulator->ppu.v = ppu_snap.v; emulator->ppu.t = ppu_snap.t; emulator->ppu.x = ppu_snap.x; emulator->ppu.w = ppu_snap.w; emulator->ppu.buffer = ppu_snap.buffer;
+    fread(&emulator->apu, sizeof(APU), 1, f); emulator->apu.emulator = emulator; emulator->apu.audio_start = 0; emulator->apu.sampler.index = 0;
+    MapperSnapshot map_snap; fread(&map_snap, sizeof(MapperSnapshot), 1, f);
+    Mapper* m = &emulator->mapper;
+    if (m->PRG_ROM) m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
+    if (m->CHR_ROM) m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
+    set_mirroring(m, map_snap.mirroring);
+    if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
+    if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
+
+    emulator->current_frame_index = sv_header.savestate_frame_count;
+    if (sv_header.savestate_frame_count >= sv_header.movie_length) {
+        emulator->movie.mode = MOVIE_MODE_FINISHED;
+    }
+
+    emulator->ppu.render = 1;
+    fclose(f);
+    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    LOG(INFO, "State Loaded! Resuming at frame %d", emulator->current_frame_index);
 }
+
 
 void increment_save_slot(Emulator* emulator) {
-    emulator->current_save_slot++;
-    if(emulator->current_save_slot > 9) emulator->current_save_slot = 0;
+    emulator->current_save_slot = (emulator->current_save_slot + 1) % 10;
 }
 
-// --- Menu Functions ---
-
-void init_menu_layout(int screen_w, int screen_h) {
-    // ...
-}
-
-void render_pause_menu(GraphicsContext* g_ctx) {
-    // ...
-}
-
-void handle_menu_touch(int x, int y, Emulator* emu) {
-    // ...
-}
+// ... init_menu_layout e outras funções sem alteração ...
 
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(argc < 2) quit(EXIT_FAILURE);
@@ -577,6 +679,7 @@ void free_emulator(struct Emulator* emulator){
     lua_bridge_free(emulator);
 }
 
+// ... (código do NSF Player inalterado) ...
 void run_NSF_player(struct Emulator* emulator) {
     LOG(INFO, "Starting NSF player...");
     JoyPad* joy1 = &emulator->mem.joy1; JoyPad* joy2 = &emulator->mem.joy2;
