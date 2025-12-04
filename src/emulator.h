@@ -63,10 +63,12 @@ typedef struct Emulator{
     uint8_t is_playing;
     uint8_t step_frame;         
     float slow_motion_factor;   
-    // uint8_t show_hitboxes; // REMOVIDO: Agora controlado via Lua
+    
+    // RENOMEADO: Flag genérica para indicar se o script Lua está rodando
+    uint8_t lua_script_active; 
 
     // --- LUA CONTEXT ---
-    struct LuaContext* lua_ctx; // NOVO
+    struct LuaContext* lua_ctx; 
 } Emulator;
 
 void init_emulator(Emulator* emulator, int argc, char *argv[]);
@@ -84,6 +86,6 @@ void tas_toggle_recording(Emulator* emu);
 void tas_toggle_playback(Emulator* emu);
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
-void tas_toggle_lua_script(Emulator* emu); // Renomeado de hitboxes
+void tas_toggle_lua_script(Emulator* emu); 
 void tas_save_movie(Emulator* emu, const char* filename);
 void tas_load_movie(Emulator* emu, const char* filename);
