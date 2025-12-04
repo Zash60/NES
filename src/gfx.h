@@ -2,6 +2,7 @@
 
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <stdint.h>
 
 // Variavel global para controle do filtro (0=Normal, 1=Scanlines)
 extern int video_filter_mode;
@@ -23,7 +24,11 @@ typedef struct GraphicsContext{
 } GraphicsContext;
 
 void free_graphics(GraphicsContext* ctx);
+
 void get_graphics_context(GraphicsContext* ctx);
-void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps);
-// Nova função para pausar sem piscar
+
+// Atualizado para receber o registrador de máscara (PPUMASK)
+void render_graphics(GraphicsContext* g_ctx, const uint32_t* buffer, float fps, uint8_t mask_reg);
+
+// Nova função para desenhar o jogo pausado sem glitches
 void render_frame_only(GraphicsContext* g_ctx);
