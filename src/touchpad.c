@@ -4,18 +4,18 @@
 #include <SDL_ttf.h>
 #include "utils.h"
 #include "touchpad.h"
-#include "emulator.h"
+#include "emulator.h" // Para acessar funções TAS
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-#define SAVE_LOAD_COOLDOWN 1000 
+#define SAVE_LOAD_COOLDOWN 500 
 
 static TouchPad touch_pad;
 static uint32_t last_touch_action_time = 0;
 
-enum{ BUTTON_CIRCLE, BUTTON_LONG };
+enum{ BUTTON_CIRCLE, BUTTON_LONG, BUTTON_SMALL };
 
 static void init_button(struct TouchButton* button, uint32_t id, size_t index, int type, char* label, int x, int y, TTF_Font* font);
 static void init_axis(GraphicsContext* ctx, int x, int y);
@@ -33,23 +33,27 @@ void init_touch_pad(struct Emulator* emulator){
     touch_pad.g_ctx = ctx;
     touch_pad.edit_mode = 0;
     touch_pad.selected_button = NULL;
+    touch_pad.show_tas_toolbar = 0; // Começa escondido
     
     int font_size = (int)((ctx->screen_height * 0.08));
     touch_pad.font = TTF_OpenFont("asap.ttf", (font_size * 4)/3);
-    if(ctx->font == NULL) LOG(ERROR, SDL_GetError());
+    
+    // Fonte menor para botões TAS
+    TTF_Font* small_font = TTF_OpenFont("asap.ttf", (int)(font_size * 0.8));
+
+    if(ctx->font == NULL || !touch_pad.font) LOG(ERROR, SDL_GetError());
 
     int offset = font_size * 3;
     int anchor_y = ctx->screen_height - offset;
     int anchor_x = ctx->screen_width - offset;
     int anchor_mid = (int)(ctx->screen_height * 0.3);
     
-    // Posições do topo
+    // Topo
     int top_y = (int)(ctx->screen_height * 0.08); 
     int center_x = ctx->screen_width / 2;
+    int tas_y = top_y + (int)(ctx->screen_height * 0.12); // Abaixo do menu
 
-    SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 255);
-
-    // Botões de Jogo
+    // --- Botões de Jogo (Laranja) ---
     init_button(&touch_pad.A, BUTTON_A, 0, BUTTON_CIRCLE, "A", anchor_x, anchor_y - offset/2, touch_pad.font);
     init_button(&touch_pad.turboA, TURBO_A, 1, BUTTON_CIRCLE, "X",  anchor_x, anchor_y + offset/2, touch_pad.font);
     init_button(&touch_pad.B, BUTTON_B, 2, BUTTON_CIRCLE, "B",  anchor_x - offset/2, anchor_y, touch_pad.font);
@@ -57,23 +61,44 @@ void init_touch_pad(struct Emulator* emulator){
     init_button(&touch_pad.select, SELECT, 4, BUTTON_LONG,"Select",  offset, anchor_mid, ctx->font);
     init_button(&touch_pad.start, START, 5, BUTTON_LONG," Start ",  anchor_x, anchor_mid, ctx->font);
     
-    // Botões de Sistema na Tela
+    // --- Botões de Sistema (Padrão) ---
     init_button(&touch_pad.load, BTN_ID_LOAD, 6, BUTTON_LONG, "LOAD", offset, top_y, ctx->font);
     init_button(&touch_pad.menu, BTN_ID_MENU, 7, BUTTON_LONG, "MENU", center_x, top_y, ctx->font);
     init_button(&touch_pad.save, BTN_ID_SAVE, 8, BUTTON_LONG, "SAVE", ctx->screen_width - offset, top_y, ctx->font);
 
+    // --- Botões TAS (Azul/Cinza) ---
+    // Botão para abrir/fechar ferramentas TAS
+    init_button(&touch_pad.tas_toggle, BTN_ID_TAS_TOGGLE, 9, BUTTON_SMALL, "TAS", center_x + (int)(ctx->screen_width * 0.15), top_y, small_font);
+    
+    // Barra de ferramentas TAS (Centralizada abaixo do menu)
+    int tas_spacing = (int)(ctx->screen_width * 0.09);
+    int tas_start_x = center_x - (tas_spacing * 2);
+    
+    init_button(&touch_pad.tas_rec,  BTN_ID_TAS_REC,  10, BUTTON_SMALL, "REC",  tas_start_x, tas_y, small_font);
+    init_button(&touch_pad.tas_play, BTN_ID_TAS_PLAY, 11, BUTTON_SMALL, "PLAY", tas_start_x + tas_spacing, tas_y, small_font);
+    init_button(&touch_pad.tas_slow, BTN_ID_TAS_SLOW, 12, BUTTON_SMALL, "SLW",  tas_start_x + tas_spacing*2, tas_y, small_font);
+    init_button(&touch_pad.tas_step, BTN_ID_TAS_STEP, 13, BUTTON_SMALL, " >| ", tas_start_x + tas_spacing*3, tas_y, small_font);
+    init_button(&touch_pad.tas_box,  BTN_ID_TAS_BOX,  14, BUTTON_SMALL, "[ ]",  tas_start_x + tas_spacing*4, tas_y, small_font);
+
     init_axis(ctx, offset, anchor_y);
-    SDL_SetRenderDrawColor(ctx->renderer, 0, 0, 0, 255);
-    LOG(DEBUG, "Initialized touch controls");
+    
+    if(small_font) TTF_CloseFont(small_font);
+    LOG(DEBUG, "Initialized touch controls with TAS UI");
 }
 
 static void init_button(struct TouchButton* button, uint32_t id, size_t index, int type, char* label, int x, int y, TTF_Font* font){
     GraphicsContext* ctx = touch_pad.g_ctx;
     touch_pad.buttons[index] = button;
-    SDL_Color color = {0xF9, 0x58, 0x1A};
+    SDL_Color color = {0xF9, 0x58, 0x1A}; // Laranja padrão
+    
+    // Cores diferentes para TAS e Sistema
+    if(id >= BTN_ID_TAS_TOGGLE) { color.r=0; color.g=150; color.b=255; } // Azul Ciano
+    
     SDL_Surface* text_surf = TTF_RenderText_Solid(font, label, 0, color);
     
-    int w = text_surf->w + 40, h = text_surf->h + 20, r = h / 2;
+    int w = text_surf->w + 40, h = text_surf->h + 20;
+    if(type == BUTTON_SMALL) { w = text_surf->w + 20; h = text_surf->h + 10; }
+    int r = h / 2;
     if(type == BUTTON_CIRCLE) w = h;
     
     button->texture = SDL_CreateTexture(ctx->renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, w, h);
@@ -82,26 +107,23 @@ static void init_button(struct TouchButton* button, uint32_t id, size_t index, i
     SDL_SetRenderDrawColor(ctx->renderer, 0, 0, 0, 0);
     SDL_RenderClear(ctx->renderer);
     
-    // Desenha fundo do botão
-    SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 100);
+    // Desenha fundo
+    SDL_SetRenderDrawColor(ctx->renderer, color.r, color.g, color.b, 80);
     if(w != h) {
-        // Retangular arredondado
         SDL_FRect rdest = {(float)r, 0, (float)(w - h), (float)h};
         SDL_RenderFillRect(ctx->renderer, &rdest);
         SDL_RenderFillCircle(ctx->renderer, r, r, r-1);
         SDL_RenderFillCircle(ctx->renderer, w-r, r, r-1);
         // Borda
-        SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 200);
+        SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 180);
         SDL_RenderLine(ctx->renderer, r, 0, w-r, 0);
         SDL_RenderLine(ctx->renderer, r, h-1, w-r, h-1);
     } else {
-        // Circular
         SDL_RenderFillCircle(ctx->renderer, r, r, r-2);
-        SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 200);
+        SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 180);
         SDL_RenderDrawCircle(ctx->renderer, r, r, r-1);
     }
     
-    // Desenha texto
     SDL_Texture* text = SDL_CreateTextureFromSurface(ctx->renderer, text_surf);
     SDL_FRect dest = {(float)(w - text_surf->w)/2, (float)(h - text_surf->h)/2, (float)text_surf->w, (float)text_surf->h};
     SDL_RenderTexture(ctx->renderer, text, NULL, &dest);
@@ -162,11 +184,43 @@ void render_touch_controls(GraphicsContext* ctx){
 
     for(int i = 0; i < TOUCH_BUTTON_COUNT; i++){
         TouchButton* button = touch_pad.buttons[i];
-        if (button) {
-            if(touch_pad.edit_mode) SDL_SetTextureAlphaMod(button->texture, 255);
-            else SDL_SetTextureAlphaMod(button->texture, 150); // Transparencia
-            SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
+        if (!button) continue;
+
+        // Lógica para esconder/mostrar botões TAS
+        if (button->id >= BTN_ID_TAS_REC && button->id <= BTN_ID_TAS_BOX && !touch_pad.show_tas_toolbar) {
+            continue;
         }
+
+        // Cores de Estado para TAS
+        if (button->id == BTN_ID_TAS_REC) {
+            // Vermelho vibrante se gravando
+            if (touch_pad.emulator->is_recording) SDL_SetTextureColorMod(button->texture, 255, 0, 0);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        } 
+        else if (button->id == BTN_ID_TAS_PLAY) {
+            // Verde vibrante se reproduzindo
+            if (touch_pad.emulator->is_playing) SDL_SetTextureColorMod(button->texture, 0, 255, 0);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+        else if (button->id == BTN_ID_TAS_SLOW) {
+            // Amarelo se Slow Motion ativo
+            if (touch_pad.emulator->slow_motion_factor > 1.0f) SDL_SetTextureColorMod(button->texture, 255, 255, 0);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+        else if (button->id == BTN_ID_TAS_BOX) {
+            // Roxo se Hitboxes ativas
+            if (touch_pad.emulator->show_hitboxes) SDL_SetTextureColorMod(button->texture, 255, 0, 255);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+
+        // Alpha para modo de edição
+        if(touch_pad.edit_mode) SDL_SetTextureAlphaMod(button->texture, 255);
+        else SDL_SetTextureAlphaMod(button->texture, 150); 
+
+        SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
+        
+        // Reset Color Mod
+        SDL_SetTextureColorMod(button->texture, 255, 255, 255);
     }
 }
 
@@ -208,6 +262,9 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *btn = touch_pad.buttons[i];
                 if (!btn) continue;
+                
+                // Ignora botões TAS escondidos
+                if (btn->id >= BTN_ID_TAS_REC && btn->id <= BTN_ID_TAS_BOX && !touch_pad.show_tas_toolbar) continue;
 
                 if ((i < 4 && is_within_circle((int)x, (int)y, btn->x, btn->y, btn->r)) ||
                     (i >= 4 && is_within_bound((int)x, (int)y, &btn->dest))) {
@@ -218,6 +275,7 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                     btn->active = 1;
                     btn->finger = event->tfinger.fingerID;
                     
+                    // --- Lógica de Ação dos Botões ---
                     if (btn->id == BTN_ID_MENU) {
                         touch_pad.emulator->pause = !touch_pad.emulator->pause;
                     } else if (btn->id == BTN_ID_SAVE) {
@@ -230,7 +288,28 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
                             load_state(touch_pad.emulator, "save.dat");
                             last_touch_action_time = current_time;
                         }
-                    } else if (!touch_pad.emulator->pause) {
+                    } 
+                    // --- Lógica TAS ---
+                    else if (btn->id == BTN_ID_TAS_TOGGLE) {
+                        touch_pad.show_tas_toolbar = !touch_pad.show_tas_toolbar;
+                    }
+                    else if (btn->id == BTN_ID_TAS_REC) {
+                        tas_toggle_recording(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_PLAY) {
+                        tas_toggle_playback(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_SLOW) {
+                        tas_toggle_slow_motion(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_STEP) {
+                        tas_step_frame(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_BOX) {
+                        tas_toggle_hitboxes(touch_pad.emulator);
+                    }
+                    // --- Botões de Jogo ---
+                    else if (!touch_pad.emulator->pause) {
                         key |= btn->id;
                         if(btn->id == TURBO_A) key |= BUTTON_A;
                         if(btn->id == TURBO_B) key |= BUTTON_B;
