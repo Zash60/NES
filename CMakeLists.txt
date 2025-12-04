@@ -19,7 +19,8 @@ list(REMOVE_ITEM LUA_SOURCES "${LUA_DIR}/lua.c" "${LUA_DIR}/luac.c")
 
 add_library(lua STATIC ${LUA_SOURCES})
 target_include_directories(lua PUBLIC ${LUA_DIR})
-target_compile_definitions(lua PRIVATE LUA_USE_LINUX)
+# Adicionado LUA_USE_C89 para evitar erros de fseeko/ftello no Android
+target_compile_definitions(lua PRIVATE LUA_USE_LINUX LUA_USE_C89)
 
 # --- NES Emulator Setup ---
 
@@ -53,17 +54,15 @@ set(NES_SOURCES
 
 add_library(main SHARED ${NES_SOURCES})
 
-# --- Include Directories (FIXED) ---
+# --- Include Directories (UPDATED) ---
 target_include_directories(main PRIVATE
     ${SRC_DIR}
     ${SRC_DIR}/mappers
     ${LUA_DIR}
-    # SDL3 include path - adding both possibilities to be safe
     ${EXTERNAL_DIR}/SDL/include
-    ${EXTERNAL_DIR}/SDL/include/SDL3
-    # SDL3_ttf include path
+    ${EXTERNAL_DIR}/SDL/include/SDL3      # Fix para <SDL.h>
     ${EXTERNAL_DIR}/SDL_ttf/include
-    ${EXTERNAL_DIR}/SDL_ttf/include/SDL3_ttf
+    ${EXTERNAL_DIR}/SDL_ttf/include/SDL3_ttf # Fix para <SDL_ttf.h> se necessário
 )
 
 # --- Definições de Compilação ---
