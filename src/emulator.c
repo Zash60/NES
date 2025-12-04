@@ -1,5 +1,5 @@
 #include "emulator.h"
-#include "gamepad.hh"
+#include "gamepad.h"
 #include "touchpad.h"
 #include "controller.h"
 #include "gfx.h"
