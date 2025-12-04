@@ -1,5 +1,5 @@
 #include "emulator.h"
-#include "gamepad.h"
+#include "gamepad.hh"
 #include "touchpad.h"
 #include "controller.h"
 #include "gfx.h"
@@ -15,16 +15,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <dirent.h> // Necessário para listar arquivos
+#include <dirent.h>
 
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
+// ATUALIZADO: Versão do Save State para incluir o frame do TAS
 #define SAVE_LOAD_COOLDOWN 1000
 #define SAVE_MAGIC 0x4E45535C 
-#define SAVE_VERSION 3
+#define SAVE_VERSION 4 // <- MUDADO DE 3 PARA 4
 
-// Caminho hardcoded para garantir acesso à pasta visível no Android
 #ifdef __ANDROID__
     #define SCRIPT_PATH "/storage/emulated/0/Android/data/com.barracoder.android/files/"
 #else
@@ -48,7 +48,6 @@ uint8_t is_edit_mode();
 void refresh_script_list(Emulator* emu);
 void render_script_selector_ui(Emulator* emu);
 void handle_script_selector_input(Emulator* emu, int x, int y);
-// CORREÇÃO: Adicionado protótipo aqui
 void tas_load_script_absolute(Emulator* emu, const char* full_path);
 
 // --- FUNÇÃO PARA CRIAR SCRIPT PADRÃO ---
@@ -70,10 +69,8 @@ void create_default_script(Emulator* emu) {
         if (f) {
             fprintf(f, "-- Exemplo de Hitbox (Mario Bros)\n");
             fprintf(f, "while true do\n");
-            fprintf(f, "    -- Enderecos de RAM do Mario (X=0x86, Y=0xCE)\n");
             fprintf(f, "    local mx = memory.readbyte(0x0086)\n");
             fprintf(f, "    local my = memory.readbyte(0x00CE)\n");
-            fprintf(f, "    \n");
             fprintf(f, "    if mx > 0 and my > 0 then\n");
             fprintf(f, "        gui.drawbox(mx, my, mx+16, my+24, \"green\")\n");
             fprintf(f, "        gui.text(mx, my-10, \"P1\")\n");
@@ -82,8 +79,6 @@ void create_default_script(Emulator* emu) {
             fprintf(f, "end\n");
             fclose(f);
             LOG(INFO, "Script criado em: %s", full_path);
-        } else {
-            LOG(ERROR, "Falha ao criar script em: %s", full_path);
         }
     }
 }
@@ -112,9 +107,7 @@ void tas_init(Emulator* emu) {
 
 void refresh_script_list(Emulator* emu) {
     emu->script_count = 0;
-    
     LOG(INFO, "Scanning scripts in: %s", SCRIPT_PATH);
-
     DIR *d;
     struct dirent *dir;
     d = opendir(SCRIPT_PATH);
@@ -130,9 +123,7 @@ void refresh_script_list(Emulator* emu) {
                 strncpy(emu->script_list[emu->script_count], dir->d_name, MAX_FILENAME_LEN - 1);
                 emu->script_list[emu->script_count][MAX_FILENAME_LEN - 1] = '\0';
                 emu->script_count++;
-                
                 LOG(INFO, "Found script: %s", dir->d_name);
-                
                 if (emu->script_count >= MAX_SCRIPTS) break;
             }
         }
@@ -167,7 +158,6 @@ void render_script_selector_ui(Emulator* emu) {
     SDL_SetRenderDrawColor(g->renderer, 20, 20, 30, 245);
     SDL_FRect bg = {w * 0.1f, h * 0.1f, w * 0.8f, h * 0.8f};
     SDL_RenderFillRect(g->renderer, &bg);
-    
     SDL_SetRenderDrawColor(g->renderer, 0, 150, 255, 255);
     SDL_RenderRect(g->renderer, &bg);
 
@@ -183,7 +173,7 @@ void render_script_selector_ui(Emulator* emu) {
 
     SDL_Color txtColor = {255, 255, 255, 255};
     float start_y = bg.y + 80;
-    float item_h = (bg.h - 140) / 8; 
+    float item_h = (bg.h - 140) / 8;
     if (item_h < 40) item_h = 40;
 
     if (emu->script_count == 0) {
@@ -202,14 +192,11 @@ void render_script_selector_ui(Emulator* emu) {
             SDL_SetRenderDrawColor(g->renderer, 60, 60, 80, 255);
             SDL_FRect btnRect = {bg.x + 20, start_y + (i * (item_h + 5)), bg.w - 40, item_h};
             SDL_RenderFillRect(g->renderer, &btnRect);
-            
             SDL_SetRenderDrawColor(g->renderer, 100, 100, 120, 255);
             SDL_RenderRect(g->renderer, &btnRect);
-
             SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
             SDL_FRect dst = {btnRect.x + 10, btnRect.y + (btnRect.h - surf->h)/2, (float)surf->w, (float)surf->h};
             SDL_RenderTexture(g->renderer, tex, NULL, &dst);
-            
             SDL_DestroyTexture(tex);
             SDL_DestroySurface(surf);
         }
@@ -221,14 +208,12 @@ void render_script_selector_ui(Emulator* emu) {
         SDL_SetRenderDrawColor(g->renderer, 80, 20, 20, 255);
         SDL_FRect btnRect = {bg.x + 20, bg.y + bg.h - 60, bg.w - 40, 40};
         SDL_RenderFillRect(g->renderer, &btnRect);
-
         SDL_Texture* tex = SDL_CreateTextureFromSurface(g->renderer, surf);
         SDL_FRect dst = {btnRect.x + (btnRect.w - surf->w)/2, btnRect.y + (btnRect.h - surf->h)/2, (float)surf->w, (float)surf->h};
         SDL_RenderTexture(g->renderer, tex, NULL, &dst);
         SDL_DestroyTexture(tex);
         SDL_DestroySurface(surf);
     }
-
     SDL_SetRenderDrawBlendMode(g->renderer, SDL_BLENDMODE_NONE);
 }
 
@@ -246,23 +231,19 @@ void handle_script_selector_input(Emulator* emu, int x, int y) {
     for (int i = 0; i < emu->script_count; i++) {
         float btn_y = start_y + (i * (item_h + 5));
         if (x > w * 0.1f && x < w * 0.9f && y > btn_y && y < btn_y + item_h) {
-            
             char full_path[1024];
             snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, emu->script_list[i]);
-            
-            // Agora a função já foi declarada
             tas_load_script_absolute(emu, full_path);
-            
             emu->lua_script_active = 1;
-            emu->show_script_selector = 0; 
+            emu->show_script_selector = 0;
             return;
         }
     }
 
     float cancel_y = bg_y + bg_h - 60;
     if (x > w * 0.1f && x < w * 0.9f && y > cancel_y && y < cancel_y + 40) {
-        emu->lua_script_active = 0; 
-        emu->show_script_selector = 0; 
+        emu->lua_script_active = 0;
+        emu->show_script_selector = 0;
         LOG(INFO, "Script selector closed / Script stopped");
     }
 }
@@ -299,8 +280,7 @@ void tas_open_script_selector(Emulator* emu) {
 
 void tas_save_movie(Emulator* emu, const char* filename) {
     char full_path[1024];
-    snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename); 
-
+    snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename);
     FILE* f = fopen(full_path, "wb");
     if (f) {
         fwrite(&emu->movie.magic, sizeof(uint32_t), 1, f);
@@ -308,15 +288,12 @@ void tas_save_movie(Emulator* emu, const char* filename) {
         fwrite(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         fclose(f);
         LOG(INFO, "TAS: Movie saved to %s", full_path);
-    } else {
-        LOG(ERROR, "TAS: Failed to save movie");
     }
 }
 
 void tas_load_movie(Emulator* emu, const char* filename) {
     char full_path[1024];
     snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename);
-
     FILE* f = fopen(full_path, "rb");
     if (f) {
         uint32_t magic;
@@ -358,8 +335,6 @@ void tas_toggle_playback(Emulator* emu) {
             emu->is_recording = 0;
             emu->current_frame_index = 0;
             reset_emulator(emu);
-        } else {
-            LOG(WARN, "TAS: No movie data to play");
         }
     }
 }
@@ -381,8 +356,7 @@ void tas_toggle_lua_script(Emulator* emu) {
 }
 
 // --- Save/Load State Logic ---
-
-typedef struct { uint32_t magic; uint32_t version; uint32_t padding; } SaveHeader;
+typedef struct { uint32_t magic; uint32_t version; uint32_t tas_frame_index; } SaveHeader;
 typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
 typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
 typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
@@ -403,7 +377,7 @@ void save_state(Emulator* emulator, const char* unused) {
     FILE* f = fopen(full_path, "wb");
     if (!f) return;
 
-    SaveHeader header = { .magic = SAVE_MAGIC, .version = SAVE_VERSION };
+    SaveHeader header = { .magic = SAVE_MAGIC, .version = SAVE_VERSION, .tas_frame_index = emulator->current_frame_index };
     fwrite(&header, sizeof(SaveHeader), 1, f);
 
     CPUSnapshot cpu_snap = { .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x, .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp, .t_cycles = emulator->cpu.t_cycles };
@@ -411,9 +385,7 @@ void save_state(Emulator* emulator, const char* unused) {
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
 
     PPUSnapshot ppu_snap;
-    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000);
-    memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256);
-    memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20);
+    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20);
     ppu_snap.ctrl = emulator->ppu.ctrl; ppu_snap.mask = emulator->ppu.mask; ppu_snap.status = emulator->ppu.status;
     ppu_snap.oam_address = emulator->ppu.oam_address; ppu_snap.v = emulator->ppu.v; ppu_snap.t = emulator->ppu.t; ppu_snap.x = emulator->ppu.x; ppu_snap.w = emulator->ppu.w; ppu_snap.buffer = emulator->ppu.buffer;
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
@@ -424,8 +396,7 @@ void save_state(Emulator* emulator, const char* unused) {
     MapperSnapshot map_snap = {0};
     map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0;
     map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0;
-    map_snap.mirroring = m->mirroring;
-    map_snap.ram_size = m->RAM_size;
+    map_snap.mirroring = m->mirroring; map_snap.ram_size = m->RAM_size;
     if (m->extension) { map_snap.has_extension = 1; memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); }
     fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
     if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
@@ -454,7 +425,8 @@ void load_state(Emulator* emulator, const char* unused) {
     }
 
     SaveHeader header;
-    if (fread(&header, sizeof(SaveHeader), 1, f) != 1 || header.magic != SAVE_MAGIC) { 
+    if (fread(&header, sizeof(SaveHeader), 1, f) != 1 || header.magic != SAVE_MAGIC || header.version != SAVE_VERSION) { 
+        LOG(ERROR, "Incompatible save state version!");
         fclose(f); 
         SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); 
         SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream)); 
@@ -463,6 +435,12 @@ void load_state(Emulator* emulator, const char* unused) {
 
     CPUSnapshot cpu_snap; fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
+    
+    // Sincroniza o filme TAS
+    emulator->current_frame_index = header.tas_frame_index;
+    if (emulator->is_recording || emulator->is_playing) {
+        emulator->movie.frame_count = emulator->current_frame_index;
+    }
 
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
 
@@ -496,8 +474,6 @@ void increment_save_slot(Emulator* emulator) {
     emulator->current_save_slot++;
     if(emulator->current_save_slot > 9) emulator->current_save_slot = 0;
 }
-
-// --- Menu Functions ---
 
 void init_menu_layout(int screen_w, int screen_h) {
     int btn_w = screen_w * 0.5; 
@@ -632,7 +608,6 @@ void run_emulator(struct Emulator* emulator){
         mark_start(tm);
         
         while (SDL_PollEvent(&e)) {
-            // Verifica se o toque é para o Seletor de Scripts
             if(emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_script_selector_input(emulator, (int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height));
                 continue; 
@@ -732,11 +707,21 @@ void run_emulator(struct Emulator* emulator){
         } else {
             render_frame_only(g);
             
+            // CORREÇÃO DA LÓGICA DE PAUSA
+            // Se o seletor de script estiver aberto, mostre-o.
+            // Senão, mostre os overlays do Lua se ativos E o menu principal.
             if(emulator->show_script_selector) {
                 render_script_selector_ui(emulator);
             } else {
-                if(emulator->lua_script_active) lua_bridge_render(emulator, g);
-                if (!is_tas_toolbar_open()) render_pause_menu(g);
+                if(emulator->lua_script_active) {
+                    lua_bridge_update(emulator); // <-- CORREÇÃO: Atualiza os dados do Lua
+                    lua_bridge_render(emulator, g); // <-- Desenha os overlays
+                }
+                
+                // Só mostra o menu grande se a barra TAS não estiver visível
+                if (!is_tas_toolbar_open()) {
+                    render_pause_menu(g);
+                }
             }
             
             #ifdef __ANDROID__
@@ -750,20 +735,15 @@ void run_emulator(struct Emulator* emulator){
     release_timer(&ft); release_timer(tm);
 }
 
-// IMPLEMENTAÇÃO DA FUNÇÃO reset_emulator
 void reset_emulator(Emulator* emulator) {
     if(emulator->g_ctx.is_tv) { 
         emulator->exit=1; 
         return; 
     }
-    
     reset_cpu(&emulator->cpu); 
     reset_APU(&emulator->apu); 
     reset_ppu(&emulator->ppu);
-    
-    if(emulator->mapper.reset) {
-        emulator->mapper.reset(&emulator->mapper);
-    }
+    if(emulator->mapper.reset) emulator->mapper.reset(&emulator->mapper);
 }
 
 void free_emulator(struct Emulator* emulator){
@@ -774,6 +754,7 @@ void free_emulator(struct Emulator* emulator){
 }
 
 void run_NSF_player(struct Emulator* emulator) {
+    // ... (Código original inalterado) ...
     LOG(INFO, "Starting NSF player...");
     JoyPad* joy1 = &emulator->mem.joy1; JoyPad* joy2 = &emulator->mem.joy2;
     c6502* cpu = &emulator->cpu; APU* apu = &emulator->apu; NSF* nsf = emulator->mapper.NSF;
