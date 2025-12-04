@@ -1,0 +1,125 @@
+name: Fix Dependencies and Imports
+
+on:
+  workflow_dispatch: # Permite rodar manualmente clicando num botão
+
+jobs:
+  fix-and-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permissão necessária para fazer push
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Fix Script
+        run: |
+          cat > fix_project.sh <<'EOF'
+          #!/bin/bash
+          echo "Iniciando correcoes..."
+
+          # 1. Reescrever build.gradle
+          cat > android/app/build.gradle <<GRADLE
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.barracoder.android'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.barracoder.android"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+                  externalNativeBuild {
+                      cmake {
+                          cppFlags ""
+                          arguments "-DANDROID_STL=c++_shared"
+                      }
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+                  debug {
+                      debuggable true
+                      jniDebuggable true
+                  }
+              }
+              
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+
+              externalNativeBuild {
+                  cmake {
+                      path file("../../CMakeLists.txt")
+                      version "3.22.1"
+                  }
+              }
+
+              packagingOptions {
+                  jniLibs {
+                      pickFirsts += ['**/*.so']
+                  }
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              
+              // Android TV / Leanback
+              implementation 'androidx.leanback:leanback:1.0.0'
+              
+              // Glide for Image Loading
+              implementation 'com.github.bumptech.glide:glide:4.16.0'
+              annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
+
+              // Annotations Fix
+              implementation 'androidx.annotation:annotation:1.7.1'
+
+              testImplementation 'junit:junit:4.13.2'
+              androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+              androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+          }
+          GRADLE
+
+          # 2. Corrigir Imports Java em massa
+          # Encontra todos os arquivos Java e substitui os imports incorretos
+          find android/app/src/main/java -name "*.java" -type f -print0 | xargs -0 sed -i 's/import org.jspecify.annotations/import androidx.annotation/g'
+
+          echo "Script finalizado."
+          EOF
+
+      - name: Make script executable and run it
+        run: |
+          chmod +x fix_project.sh
+          ./fix_project.sh
+          rm fix_project.sh # Remove o script antes de commitar
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "action@github.com"
+          
+          git add android/app/build.gradle
+          git add android/app/src/main/java/
+          
+          # Só faz commit se houver mudanças
+          if git diff-index --quiet HEAD --; then
+            echo "Nenhuma alteracao detectada."
+          else
+            git commit -m "Fix: Add Glide dependency and replace jspecify with androidx annotations"
+            git push
+          fi
