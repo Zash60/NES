@@ -3,7 +3,12 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include <stdint.h>
+#include "ppu.h"
 
+// Forward declaration para evitar dependência cíclica
+struct Emulator;
+
+// Variavel global para controle do filtro (0=Normal, 1=Scanlines)
 extern int video_filter_mode;
 
 typedef struct GraphicsContext{
@@ -27,8 +32,8 @@ void get_graphics_context(GraphicsContext* ctx);
 // Renderiza o buffer do jogo para a textura
 void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint8_t mask_reg);
 
-// Desenha UI e finaliza
-void render_ui_and_present(GraphicsContext* g_ctx, float fps);
+// Desenha UI e finaliza o frame
+void render_ui_and_present(GraphicsContext* g_ctx, float fps, struct Emulator* emu);
 
-// Desenha apenas o frame
+// Desenha apenas o frame atual (para pause)
 void render_frame_only(GraphicsContext* g_ctx);
