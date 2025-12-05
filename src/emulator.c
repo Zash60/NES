@@ -118,7 +118,10 @@ void tas_save_movie(Emulator* emu, const char* filename) {
     snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename);
     FILE* f = fopen(full_path, "wb");
     if (f) {
-        fwrite(&emu->movie.magic, sizeof(uint32_t), 1, f);
+        // CORREÇÃO: Cria uma variável local para a constante
+        uint32_t magic = TAS_HEADER_MAGIC;
+        fwrite(&magic, sizeof(uint32_t), 1, f);
+        
         fwrite(&emu->movie.frame_count, sizeof(uint32_t), 1, f);
         fwrite(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         fclose(f);
