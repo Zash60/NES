@@ -45,9 +45,9 @@ MenuOption menu_options[MENU_COUNT];
 // Protótipos
 void toggle_edit_mode();
 uint8_t is_edit_mode();
-void refresh_script_list(Emulator* emu);
-void render_script_selector_ui(Emulator* emu);
-void handle_script_selector_input(Emulator* emu, int x, int y);
+// void refresh_script_list(Emulator* emu); // Implementado em tas.c
+// void render_script_selector_ui(Emulator* emu); // Implementado em tas.c
+// void handle_script_selector_input(Emulator* emu, int x, int y); // Implementado em tas.c
 void tas_load_script_absolute(Emulator* emu, const char* full_path);
 void init_menu_layout(int screen_w, int screen_h);
 void render_pause_menu(GraphicsContext* g_ctx);

@@ -51,6 +51,7 @@ set(NES_SOURCES
     ${SRC_DIR}/touchpad.c
     ${SRC_DIR}/lua_bridge.c
     ${SRC_DIR}/trace.c
+    ${SRC_DIR}/tas.c
 )
 
 # Nome da biblioteca alterado para 'nes' (libnes.so)
