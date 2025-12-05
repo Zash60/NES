@@ -311,9 +311,9 @@ void load_state(Emulator* emulator, const char* unused) {
     if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
 
     emulator->current_frame_index = sv_header.savestate_frame_count;
-    if (sv_header.savestate_frame_count >= sv_header.movie_length && sv_header.movie_guid != 0) {
-        emulator->movie.mode = MOVIE_MODE_FINISHED;
-    }
+    if (sv_header.savestate_frame_count >= sv_header.movie_length && sv_header.movie_guid != 0 && emulator->movie.read_only) {
+    emulator->movie.mode = MOVIE_MODE_FINISHED;
+}
 
     emulator->ppu.render = 1;
     fclose(f);
