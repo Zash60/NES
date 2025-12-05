@@ -53,9 +53,10 @@ void init_menu_layout(int screen_w, int screen_h);
 void render_pause_menu(GraphicsContext* g_ctx);
 void handle_menu_touch(int x, int y, Emulator* emu);
 void create_default_script(Emulator* emu);
-extern int is_tas_toolbar_open(); 
+extern int is_tas_toolbar_open();
 
-// --- FUNÇÃO PARA CRIAR SCRIPT PADRÃO ---
+// --- FUNÇÕES DE IMPLEMENTAÇÃO ---
+
 void create_default_script(Emulator* emu) {
     char full_path[1024];
     snprintf(full_path, 1024, "%sexample_box.lua", SCRIPT_PATH);
@@ -82,12 +83,9 @@ void create_default_script(Emulator* emu) {
             fprintf(f, "    FCEU.frameadvance()\n");
             fprintf(f, "end\n");
             fclose(f);
-            LOG(INFO, "Script criado em: %s", full_path);
         }
     }
 }
-
-// --- TAS & SCRIPT SELECTOR IMPLEMENTATION ---
 
 static uint64_t generate_guid() {
     time_t t;
@@ -198,16 +196,7 @@ void tas_open_script_selector(Emulator* emu) {
     }
 }
 
-// --- Save/Load State (Refatorado para TAS) ---
-
-typedef struct { 
-    uint32_t magic; 
-    uint32_t version; 
-    uint64_t movie_guid;
-    uint32_t savestate_frame_count;
-    uint32_t movie_length;
-} SaveHeader_v5;
-
+typedef struct { uint32_t magic; uint32_t version; uint64_t movie_guid; uint32_t savestate_frame_count; uint32_t movie_length; } SaveHeader_v5;
 typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
 typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
 typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
@@ -268,7 +257,7 @@ void load_state(Emulator* emulator, const char* unused) {
         LOG(ERROR, "Incompatible save state!");
         fclose(f); return; 
     }
-    
+
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
         if (emulator->movie.guid != sv_header.movie_guid) { LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); fclose(f); return; }
 
