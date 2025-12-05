@@ -1,4 +1,4 @@
-#include "emulator.h"
+#include "tas.h"
 
 void refresh_script_list(Emulator* emu) {
     // Implementação vazia
