@@ -65,7 +65,7 @@ void create_default_script(Emulator* emu) {
         fclose(f);
     } else {
         #ifdef _WIN32
-        mkdir(SCRIPT_PATH);
+        _mkdir(SCRIPT_PATH);
         #else
         mkdir(SCRIPT_PATH, 0777);
         #endif
@@ -82,6 +82,7 @@ void create_default_script(Emulator* emu) {
             fprintf(f, "    FCEU.frameadvance()\n");
             fprintf(f, "end\n");
             fclose(f);
+            LOG(INFO, "Script criado em: %s", full_path);
         }
     }
 }
@@ -336,12 +337,16 @@ void increment_save_slot(Emulator* emulator) {
     emulator->current_save_slot = (emulator->current_save_slot + 1) % 10;
 }
 
+// --- Menu Functions ---
+
 void init_menu_layout(int screen_w, int screen_h) {
     int btn_w = screen_w * 0.5; 
     int btn_h = screen_h * 0.08; 
     if (btn_h < 40) btn_h = 40;
+    
     int start_y = (screen_h - (MENU_COUNT * (btn_h + 10))) / 2;
     int center_x = (screen_w - btn_w) / 2;
+
     const char* labels[] = { "Resume", "Slot: 0", "Save State", "Load State", "Edit Controls", "Scanlines: Off", "Palette: Default", "Exit" };
     for(int i=0; i<MENU_COUNT; i++) {
         strncpy(menu_options[i].label, labels[i], 32);
@@ -357,18 +362,26 @@ void render_pause_menu(GraphicsContext* g_ctx) {
 #ifdef __ANDROID__
     if (is_tas_toolbar_open()) return; 
 #endif
+
     SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 220);
     SDL_RenderFillRect(g_ctx->renderer, NULL);
+
     SDL_Color txt = {255,255,255,255};
     SDL_Color bg = {60,60,60,255}, act = {100,60,60,255};
+
     for(int i=0; i<MENU_COUNT; i++) {
-        if(i==4 && is_edit_mode()) SDL_SetRenderDrawColor(g_ctx->renderer, act.r, act.g, act.b, 255);
-        else SDL_SetRenderDrawColor(g_ctx->renderer, bg.r, bg.g, bg.b, 255);
+        if(i==4 && is_edit_mode()) 
+            SDL_SetRenderDrawColor(g_ctx->renderer, act.r, act.g, act.b, 255);
+        else 
+            SDL_SetRenderDrawColor(g_ctx->renderer, bg.r, bg.g, bg.b, 255);
+        
         SDL_FRect r = {(float)menu_options[i].rect.x, (float)menu_options[i].rect.y, (float)menu_options[i].rect.w, (float)menu_options[i].rect.h};
         SDL_RenderFillRect(g_ctx->renderer, &r);
+        
         char* lbl = menu_options[i].label;
         if(i==5) lbl = video_filter_mode ? "Scanlines: ON" : "Scanlines: OFF";
+        
         SDL_Surface* surf = TTF_RenderText_Solid(g_ctx->font, lbl, 0, txt);
         if(surf){
             SDL_Texture* tx = SDL_CreateTextureFromSurface(g_ctx->renderer, surf);
@@ -384,6 +397,7 @@ void handle_menu_touch(int x, int y, Emulator* emu) {
 #ifdef __ANDROID__
     if (is_tas_toolbar_open() || emu->show_script_selector) return;
 #endif
+
     for(int i=0; i<MENU_COUNT; i++) {
         SDL_Rect r = menu_options[i].rect;
         if(x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h) {
