@@ -266,7 +266,7 @@ void load_state(Emulator* emulator, const char* unused) {
             fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
         }
         
-        uint32_t min_len = (sv_header.movie_length < emulator->movie.frame_count) ? sv_header.movie_length : emulator->movie.frame_count;
+        uint32_t min_len = (sv_header.savestate_frame_count < emulator->movie.frame_count) ? sv_header.savestate_frame_count : emulator->movie.frame_count;
         if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) { LOG(ERROR, "Savestate timeline mismatch!"); free(savestate_movie_frames); fclose(f); return; }
 
         if (emulator->movie.read_only) {
