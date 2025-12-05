@@ -21,7 +21,7 @@
 static uint64_t PERIOD;
 static uint16_t TURBO_SKIP;
 
-#define SAVE_LOAD_COOLDOWN 1000
+#define SAVE_LOAD_COOLDOWN 500
 #define SAVE_MAGIC 0x4E45535C 
 #define SAVE_VERSION 5
 
@@ -226,7 +226,13 @@ void save_state(Emulator* emulator, const char* unused) {
 
     CPUSnapshot cpu_snap = { .pc = emulator->cpu.pc, .ac = emulator->cpu.ac, .x = emulator->cpu.x, .y = emulator->cpu.y, .sr = emulator->cpu.sr, .sp = emulator->cpu.sp, .t_cycles = emulator->cpu.t_cycles };
     fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
+    
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    
+    // Salva também o estado dos controles para evitar bugs de "botão preso"
+    fwrite(&emulator->mem.joy1, sizeof(JoyPad), 1, f);
+    fwrite(&emulator->mem.joy2, sizeof(JoyPad), 1, f);
+
     PPUSnapshot ppu_snap; memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20); ppu_snap.ctrl = emulator->ppu.ctrl; ppu_snap.mask = emulator->ppu.mask; ppu_snap.status = emulator->ppu.status; ppu_snap.oam_address = emulator->ppu.oam_address; ppu_snap.v = emulator->ppu.v; ppu_snap.t = emulator->ppu.t; ppu_snap.x = emulator->ppu.x; ppu_snap.w = emulator->ppu.w; ppu_snap.buffer = emulator->ppu.buffer;
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
     fwrite(&emulator->apu, sizeof(APU), 1, f);
@@ -260,7 +266,6 @@ void load_state(Emulator* emulator, const char* unused) {
 
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
         if (emulator->movie.guid != sv_header.movie_guid) { 
-            // Em modo TAS, GUID diferente é fatal, pois são filmes diferentes
             LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
             fclose(f); return; 
         }
@@ -270,16 +275,12 @@ void load_state(Emulator* emulator, const char* unused) {
             fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
         }
         
-        // --- FIX: Removido o bloqueio por timeline mismatch ---
-        // O código original verificava memcmp e dava return.
-        // Aqui nós removemos essa checagem para permitir "re-recording".
-        // Se a timeline for diferente (inputs diferentes), nós sobrescrevemos o histórico.
-        
+        // FIX: Permite sobrescrever o histórico de inputs para re-recording
         uint32_t min_len = (sv_header.savestate_frame_count < emulator->movie.frame_count) ? sv_header.savestate_frame_count : emulator->movie.frame_count;
         if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) {
              LOG(INFO, "TAS: Timeline divergence detected. Overwriting history with savestate data.");
         }
-        
+
         if (emulator->movie.read_only) {
             if (sv_header.movie_length > emulator->movie.frame_count) { 
                 LOG(ERROR, "Cannot load future state in read-only mode!"); 
@@ -288,13 +289,13 @@ void load_state(Emulator* emulator, const char* unused) {
                 return; 
             }
         } else {
-            // Modo de Gravação: Restaura o filme do save state para a memória
+            // Restaura o filme do save para a memória (sobrescreve o histórico atual)
             emulator->movie.frame_count = sv_header.movie_length;
             memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
             
             emulator->movie.mode = MOVIE_MODE_RECORDING;
             
-            // Marca para truncar o filme se carregamos um estado anterior ao fim atual
+            // Marca para truncar se voltamos no tempo
             if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
                 emulator->needs_truncation = 1;
             }
@@ -317,6 +318,21 @@ void load_state(Emulator* emulator, const char* unused) {
     emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
     
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    
+    // Tenta ler o estado dos joypads, se falhar ou arquivo antigo, reseta
+    if (fread(&emulator->mem.joy1, sizeof(JoyPad), 1, f) != 1) {
+        emulator->mem.joy1.index = 0; emulator->mem.joy1.strobe = 0; emulator->mem.joy1.status = 0;
+    }
+    if (fread(&emulator->mem.joy2, sizeof(JoyPad), 1, f) != 1) {
+        emulator->mem.joy2.index = 0; emulator->mem.joy2.strobe = 0; emulator->mem.joy2.status = 0;
+    }
+
+    // FORÇA RESET DOS ÍNDICES DE LEITURA DO CONTROLE (CRUCIAL PARA EVITAR START PRESSIONADO)
+    emulator->mem.joy1.index = 0;
+    emulator->mem.joy1.strobe = 0;
+    emulator->mem.joy2.index = 0;
+    emulator->mem.joy2.strobe = 0;
+
     PPUSnapshot ppu_snap; fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
     memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
     emulator->ppu.ctrl = ppu_snap.ctrl; emulator->ppu.mask = ppu_snap.mask; emulator->ppu.status = ppu_snap.status; emulator->ppu.oam_address = ppu_snap.oam_address;
@@ -332,8 +348,8 @@ void load_state(Emulator* emulator, const char* unused) {
 
     emulator->current_frame_index = sv_header.savestate_frame_count;
     if (sv_header.savestate_frame_count >= sv_header.movie_length && sv_header.movie_guid != 0 && emulator->movie.read_only) {
-    emulator->movie.mode = MOVIE_MODE_FINISHED;
-}
+        emulator->movie.mode = MOVIE_MODE_FINISHED;
+    }
 
     emulator->ppu.render = 1;
     fclose(f);
