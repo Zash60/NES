@@ -42,13 +42,21 @@ typedef struct {
 #define MENU_COUNT 8
 MenuOption menu_options[MENU_COUNT];
 
-// Forward declarations
+// --- Forward declarations (PROTÓTIPOS ADICIONADOS AQUI) ---
 void toggle_edit_mode();
 uint8_t is_edit_mode();
 void refresh_script_list(Emulator* emu);
 void render_script_selector_ui(Emulator* emu);
 void handle_script_selector_input(Emulator* emu, int x, int y);
 void tas_load_script_absolute(Emulator* emu, const char* full_path);
+
+// Protótipos que estavam faltando e causavam o erro
+void init_menu_layout(int screen_w, int screen_h);
+void render_pause_menu(GraphicsContext* g_ctx);
+void handle_menu_touch(int x, int y, Emulator* emu);
+// is_tas_toolbar_open é definido no touchpad.h, mas se não estiver lá, adicionamos aqui extern
+extern int is_tas_toolbar_open(); 
+
 
 // --- FUNÇÃO PARA CRIAR SCRIPT PADRÃO ---
 void create_default_script(Emulator* emu) {
@@ -296,7 +304,7 @@ void tas_save_movie(Emulator* emu, const char* filename) {
     snprintf(full_path, 1024, "%s%s", SCRIPT_PATH, filename);
     FILE* f = fopen(full_path, "wb");
     if (f) {
-        fwrite(&emu->movie, sizeof(uint32_t), 1, f); // Assumindo TAS_HEADER_MAGIC
+        fwrite(&emu->movie.magic, sizeof(uint32_t), 1, f);
         fwrite(&emu->movie.frame_count, sizeof(uint32_t), 1, f);
         fwrite(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         fclose(f);
@@ -321,33 +329,34 @@ void tas_load_movie(Emulator* emu, const char* filename) {
     }
 }
 
-void tas_start_recording(Emulator* emu) {
-    LOG(INFO, "TAS: Recording Started");
-    emu->movie.mode = MOVIE_MODE_RECORDING;
-    emu->movie.read_only = 0;
-    emu->movie.guid = generate_guid();
-    emu->movie.frame_count = 0;
-    emu->current_frame_index = 0;
-    reset_emulator(emu);
-}
-
-void tas_stop_movie(Emulator* emu) {
-    LOG(INFO, "TAS: Movie Stopped");
-    emu->movie.mode = MOVIE_MODE_INACTIVE;
-    emu->movie.guid = 0;
-    emu->movie.frame_count = 0;
-    emu->current_frame_index = 0;
-}
-
-void tas_start_playback(Emulator* emu, int read_only) {
-    if (emu->movie.frame_count > 0) {
-        LOG(INFO, "TAS: Playback Started (Read-Only: %d)", read_only);
-        emu->movie.mode = MOVIE_MODE_PLAYBACK;
-        emu->movie.read_only = read_only;
-        emu->current_frame_index = 0;
-        reset_emulator(emu);
+void tas_toggle_recording(Emulator* emu) {
+    if (emu->is_recording) {
+        LOG(INFO, "TAS: Recording Stopped.");
+        emu->is_recording = 0;
+        tas_save_movie(emu, "recording.tas");
     } else {
-        LOG(WARN, "TAS: No movie data to play");
+        LOG(INFO, "TAS: Recording Started");
+        emu->is_recording = 1;
+        emu->is_playing = 0;
+        emu->current_frame_index = 0;
+        emu->movie.frame_count = 0;
+        reset_emulator(emu);
+    }
+}
+
+void tas_toggle_playback(Emulator* emu) {
+    if (emu->is_playing) {
+        LOG(INFO, "TAS: Playback Stopped");
+        emu->is_playing = 0;
+    } else {
+        tas_load_movie(emu, "recording.tas");
+        if (emu->movie.frame_count > 0) {
+            LOG(INFO, "TAS: Playback Started.");
+            emu->is_playing = 1;
+            emu->is_recording = 0;
+            emu->current_frame_index = 0;
+            reset_emulator(emu);
+        }
     }
 }
 
@@ -385,6 +394,8 @@ void save_state(Emulator* emulator, const char* unused) {
 
     char full_path[1024];
     get_slot_filename(emulator, full_path, sizeof(full_path));
+    LOG(INFO, "Saving state to: %s", full_path);
+
     FILE* f = fopen(full_path, "wb");
     if (!f) return;
 
@@ -501,7 +512,71 @@ void increment_save_slot(Emulator* emulator) {
     emulator->current_save_slot = (emulator->current_save_slot + 1) % 10;
 }
 
-// ... init_menu_layout e outras funções sem alteração ...
+void init_menu_layout(int screen_w, int screen_h) {
+    int btn_w = screen_w * 0.5; 
+    int btn_h = screen_h * 0.08; 
+    if (btn_h < 40) btn_h = 40;
+    int start_y = (screen_h - (MENU_COUNT * (btn_h + 10))) / 2;
+    int center_x = (screen_w - btn_w) / 2;
+    const char* labels[] = { "Resume", "Slot: 0", "Save State", "Load State", "Edit Controls", "Scanlines: Off", "Palette: Default", "Exit" };
+    for(int i=0; i<MENU_COUNT; i++) {
+        strncpy(menu_options[i].label, labels[i], 32);
+        menu_options[i].rect.x = center_x;
+        menu_options[i].rect.y = start_y + i * (btn_h + 10);
+        menu_options[i].rect.w = btn_w;
+        menu_options[i].rect.h = btn_h;
+        menu_options[i].action_code = i;
+    }
+}
+
+void render_pause_menu(GraphicsContext* g_ctx) {
+#ifdef __ANDROID__
+    if (is_tas_toolbar_open()) return; 
+#endif
+    SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_ctx->renderer, 0, 0, 0, 220);
+    SDL_RenderFillRect(g_ctx->renderer, NULL);
+    SDL_Color txt = {255,255,255,255};
+    SDL_Color bg = {60,60,60,255}, act = {100,60,60,255};
+    for(int i=0; i<MENU_COUNT; i++) {
+        if(i==4 && is_edit_mode()) SDL_SetRenderDrawColor(g_ctx->renderer, act.r, act.g, act.b, 255);
+        else SDL_SetRenderDrawColor(g_ctx->renderer, bg.r, bg.g, bg.b, 255);
+        SDL_FRect r = {(float)menu_options[i].rect.x, (float)menu_options[i].rect.y, (float)menu_options[i].rect.w, (float)menu_options[i].rect.h};
+        SDL_RenderFillRect(g_ctx->renderer, &r);
+        char* lbl = menu_options[i].label;
+        if(i==5) lbl = video_filter_mode ? "Scanlines: ON" : "Scanlines: OFF";
+        SDL_Surface* surf = TTF_RenderText_Solid(g_ctx->font, lbl, 0, txt);
+        if(surf){
+            SDL_Texture* tx = SDL_CreateTextureFromSurface(g_ctx->renderer, surf);
+            SDL_FRect td = {r.x+(r.w-surf->w)/2, r.y+(r.h-surf->h)/2, (float)surf->w, (float)surf->h};
+            SDL_RenderTexture(g_ctx->renderer, tx, NULL, &td);
+            SDL_DestroyTexture(tx); SDL_DestroySurface(surf);
+        }
+    }
+    SDL_SetRenderDrawBlendMode(g_ctx->renderer, SDL_BLENDMODE_NONE);
+}
+
+void handle_menu_touch(int x, int y, Emulator* emu) {
+#ifdef __ANDROID__
+    if (is_tas_toolbar_open() || emu->show_script_selector) return;
+#endif
+    for(int i=0; i<MENU_COUNT; i++) {
+        SDL_Rect r = menu_options[i].rect;
+        if(x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h) {
+            switch(i) {
+                case 0: emu->pause = 0; break;
+                case 1: increment_save_slot(emu); snprintf(menu_options[i].label, 32, "Slot: %d", emu->current_save_slot); break;
+                case 2: save_state(emu, NULL); emu->pause = 0; break;
+                case 3: load_state(emu, NULL); emu->pause = 0; break;
+                case 4: toggle_edit_mode(); emu->pause = 0; strncpy(menu_options[i].label, is_edit_mode() ? "Stop Edit" : "Edit Controls", 32); break;
+                case 5: video_filter_mode = !video_filter_mode; break;
+                case 6: { int next = (emu->ppu.current_palette_index + 1) % 3; set_emulator_palette(&emu->ppu, next); snprintf(menu_options[i].label, 32, "Palette: %s", next==0?"Default":next==1?"Sony":"FCEUX"); } break;
+                case 7: emu->exit = 1; break;
+            }
+            SDL_Delay(200);
+        }
+    }
+}
 
 void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     if(argc < 2) quit(EXIT_FAILURE);
@@ -660,16 +735,11 @@ void run_emulator(struct Emulator* emulator){
 }
 
 void reset_emulator(Emulator* emulator) {
-    if(emulator->g_ctx.is_tv) { 
-        emulator->exit=1; 
-        return; 
-    }
+    if(emulator->g_ctx.is_tv) { emulator->exit=1; return; }
     reset_cpu(&emulator->cpu); 
     reset_APU(&emulator->apu); 
     reset_ppu(&emulator->ppu);
-    if(emulator->mapper.reset) {
-        emulator->mapper.reset(&emulator->mapper);
-    }
+    if(emulator->mapper.reset) emulator->mapper.reset(&emulator->mapper);
 }
 
 void free_emulator(struct Emulator* emulator){
@@ -679,7 +749,6 @@ void free_emulator(struct Emulator* emulator){
     lua_bridge_free(emulator);
 }
 
-// ... (código do NSF Player inalterado) ...
 void run_NSF_player(struct Emulator* emulator) {
     LOG(INFO, "Starting NSF player...");
     JoyPad* joy1 = &emulator->mem.joy1; JoyPad* joy2 = &emulator->mem.joy2;
