@@ -39,7 +39,7 @@ void init_touch_pad(struct Emulator* emulator){
     touch_pad.font = TTF_OpenFont("asap.ttf", (font_size * 4)/3);
     TTF_Font* small_font = TTF_OpenFont("asap.ttf", (int)(font_size * 0.6));
 
-    if(ctx->font == NULL || !touch_pad.font) LOG(ERROR, "%s", SDL_GetError());
+    if(ctx->font == NULL || !touch_pad.font) LOG(ERROR, "Touchpad Font Error: %s", SDL_GetError());
 
     int offset = font_size * 3;
     int anchor_y = ctx->screen_height - offset;
@@ -60,7 +60,6 @@ void init_touch_pad(struct Emulator* emulator){
     init_button(&touch_pad.menu, BTN_ID_MENU, 7, BUTTON_LONG, "MENU", center_x, top_y, ctx->font);
     init_button(&touch_pad.save, BTN_ID_SAVE, 8, BUTTON_LONG, "SAVE", ctx->screen_width - offset, top_y, ctx->font);
 
-    // TAS UI
     init_button(&touch_pad.tas_toggle, BTN_ID_TAS_TOGGLE, 9, BUTTON_SMALL, "TAS", center_x + (int)(ctx->screen_width * 0.18), top_y, small_font);
     
     int tas_count = 5;
@@ -139,56 +138,110 @@ static void init_axis(GraphicsContext* ctx, int x, int y){
     axis->r = (int)(0.09 * ctx->screen_height);
     axis->x = axis->inner_x = axis->origin_x = x;
     axis->y = axis->inner_y = axis->origin_y = y;
+
     int bg_r = axis->r + 30;
     axis->bg_dest.x = axis->x - bg_r; axis->bg_dest.y = axis->y - bg_r;
     axis->bg_dest.w = axis->bg_dest.h = bg_r * 2;
     axis->joy_dest.w = axis->joy_dest.h = axis->r * 2;
+
     axis->bg_tx = SDL_CreateTexture(ctx->renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, bg_r * 2, bg_r * 2);
     axis->joy_tx = SDL_CreateTexture(ctx->renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, axis->r * 2, axis->r * 2);
-    SDL_SetTextureBlendMode(axis->bg_tx, SDL_BLENDMODE_BLEND); SDL_SetTextureBlendMode(axis->joy_tx, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderTarget(ctx->renderer, axis->bg_tx); SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 50); SDL_RenderDrawCircle(ctx->renderer, bg_r, bg_r, bg_r - 2);
-    SDL_SetRenderTarget(ctx->renderer, axis->joy_tx); SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 180); SDL_RenderFillCircle(ctx->renderer, axis->r, axis->r, axis->r - 2);
+    
+    SDL_SetTextureBlendMode(axis->bg_tx, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureBlendMode(axis->joy_tx, SDL_BLENDMODE_BLEND);
+    
+    SDL_SetRenderTarget(ctx->renderer, axis->bg_tx);
+    SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 50);
+    SDL_RenderDrawCircle(ctx->renderer, bg_r, bg_r, bg_r - 2);
+    
+    SDL_SetRenderTarget(ctx->renderer, axis->joy_tx);
+    SDL_SetRenderDrawColor(ctx->renderer, 0xF9, 0x58, 0x1A, 180);
+    SDL_RenderFillCircle(ctx->renderer, axis->r, axis->r, axis->r - 2);
+    
     SDL_SetRenderTarget(ctx->renderer, NULL);
 }
 
-static void update_joy_pos(){ touch_pad.axis.joy_dest.x = touch_pad.axis.inner_x - touch_pad.axis.r; touch_pad.axis.joy_dest.y = touch_pad.axis.inner_y - touch_pad.axis.r; }
+static void update_joy_pos(){
+    touch_pad.axis.joy_dest.x = touch_pad.axis.inner_x - touch_pad.axis.r;
+    touch_pad.axis.joy_dest.y = touch_pad.axis.inner_y - touch_pad.axis.r;
+}
 
 void render_touch_controls(GraphicsContext* ctx){
     if(ctx->is_tv) return;
-    if(!touch_pad.axis.active){ touch_pad.axis.inner_x = touch_pad.axis.x; touch_pad.axis.inner_y = touch_pad.axis.y; update_joy_pos(); }
+
+    if(!touch_pad.axis.active){
+        touch_pad.axis.inner_x = touch_pad.axis.x;
+        touch_pad.axis.inner_y = touch_pad.axis.y;
+        update_joy_pos();
+    }
     SDL_RenderTexture(ctx->renderer, touch_pad.axis.bg_tx, NULL, &touch_pad.axis.bg_dest);
     SDL_RenderTexture(ctx->renderer, touch_pad.axis.joy_tx, NULL, &touch_pad.axis.joy_dest);
+
     for(int i = 0; i < TOUCH_BUTTON_COUNT; i++){
         TouchButton* button = touch_pad.buttons[i];
         if (!button) continue;
-        if (button->id >= BTN_ID_TAS_REC && button->id <= BTN_ID_TAS_BOX && !touch_pad.show_tas_toolbar) continue;
-        if (button->id == BTN_ID_TAS_REC) { if (touch_pad.emulator->movie.mode == MOVIE_MODE_RECORDING) SDL_SetTextureColorMod(button->texture, 255, 0, 0); else SDL_SetTextureColorMod(button->texture, 255, 255, 255); } 
-        else if (button->id == BTN_ID_TAS_PLAY) { if (touch_pad.emulator->movie.mode == MOVIE_MODE_PLAYBACK) SDL_SetTextureColorMod(button->texture, 0, 255, 0); else SDL_SetTextureColorMod(button->texture, 255, 255, 255); }
-        else if (button->id == BTN_ID_TAS_SLOW) { if (touch_pad.emulator->slow_motion_factor > 1.0f) SDL_SetTextureColorMod(button->texture, 255, 255, 0); else SDL_SetTextureColorMod(button->texture, 255, 255, 255); }
-        else if (button->id == BTN_ID_TAS_BOX) { if (touch_pad.emulator->lua_script_active) SDL_SetTextureColorMod(button->texture, 255, 0, 255); else SDL_SetTextureColorMod(button->texture, 255, 255, 255); }
-        if(touch_pad.edit_mode) SDL_SetTextureAlphaMod(button->texture, 255); else SDL_SetTextureAlphaMod(button->texture, 150); 
+
+        if (button->id >= BTN_ID_TAS_REC && button->id <= BTN_ID_TAS_BOX && !touch_pad.show_tas_toolbar) {
+            continue;
+        }
+
+        // --- Cores de Estado (Accessando via struct movie corretamente) ---
+        if (button->id == BTN_ID_TAS_REC) {
+            if (touch_pad.emulator->movie.mode == MOVIE_MODE_RECORDING) SDL_SetTextureColorMod(button->texture, 255, 0, 0); 
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+        else if (button->id == BTN_ID_TAS_PLAY) {
+            if (touch_pad.emulator->movie.mode == MOVIE_MODE_PLAYBACK) SDL_SetTextureColorMod(button->texture, 0, 255, 0);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+        else if (button->id == BTN_ID_TAS_SLOW) {
+            if (touch_pad.emulator->slow_motion_factor > 1.0f) SDL_SetTextureColorMod(button->texture, 255, 255, 0);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+        else if (button->id == BTN_ID_TAS_BOX) {
+            if (touch_pad.emulator->lua_script_active) SDL_SetTextureColorMod(button->texture, 255, 0, 255);
+            else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
+        }
+
+        if(touch_pad.edit_mode) SDL_SetTextureAlphaMod(button->texture, 255);
+        else SDL_SetTextureAlphaMod(button->texture, 150); 
+
         SDL_RenderTexture(ctx->renderer, button->texture, NULL, &button->dest);
+        
         SDL_SetTextureColorMod(button->texture, 255, 255, 255);
     }
 }
 
 void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
     if(!touch_pad.g_ctx || joyPad->player != 0) return;
+    
     uint16_t key = joyPad->status;
     double x = event->tfinger.x, y = event->tfinger.y;
     uint32_t current_time = SDL_GetTicks();
+    
     switch (event->type) {
         case SDL_EVENT_FINGER_UP: {
             to_abs_position(&x, &y);
             if (touch_pad.edit_mode) { touch_pad.selected_button = NULL; return; }
+
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *btn = touch_pad.buttons[i];
                 if (btn && btn->active && btn->finger == event->tfinger.fingerID) {
-                    btn->active = 0; btn->finger = -1;
-                    if (btn->id < BTN_ID_SAVE) { key &= ~btn->id; if(btn->id == TURBO_A) key &= ~BUTTON_A; if(btn->id == TURBO_B) key &= ~BUTTON_B; }
+                    btn->active = 0;
+                    btn->finger = -1;
+                    if (btn->id < BTN_ID_SAVE) {
+                         key &= ~btn->id;
+                         if(btn->id == TURBO_A) key &= ~BUTTON_A;
+                         if(btn->id == TURBO_B) key &= ~BUTTON_B;
+                    }
                 }
             }
-            if (touch_pad.axis.finger == event->tfinger.fingerID) { touch_pad.axis.active = 0; touch_pad.axis.finger = -1; key &= ~(RIGHT | LEFT | UP | DOWN); }
+            
+            if (touch_pad.axis.finger == event->tfinger.fingerID) {
+                touch_pad.axis.active = 0;
+                touch_pad.axis.finger = -1;
+                key &= ~(RIGHT | LEFT | UP | DOWN);
+            }
             break;
         }
         case SDL_EVENT_FINGER_DOWN: {
@@ -197,36 +250,98 @@ void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
             for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
                 TouchButton *btn = touch_pad.buttons[i];
                 if (!btn) continue;
+                
                 if (btn->id >= BTN_ID_TAS_REC && btn->id <= BTN_ID_TAS_BOX && !touch_pad.show_tas_toolbar) continue;
-                if ((i < 4 && is_within_circle((int)x, (int)y, btn->x, btn->y, btn->r)) || (i >= 4 && is_within_bound((int)x, (int)y, &btn->dest))) {
+
+                if ((i < 4 && is_within_circle((int)x, (int)y, btn->x, btn->y, btn->r)) ||
+                    (i >= 4 && is_within_bound((int)x, (int)y, &btn->dest))) {
+                    
                     if (touch_pad.edit_mode) { touch_pad.selected_button = btn; return; }
-                    pressed = 1; btn->active = 1; btn->finger = event->tfinger.fingerID;
-                    if (btn->id == BTN_ID_MENU) touch_pad.emulator->pause = !touch_pad.emulator->pause;
-                    else if (btn->id == BTN_ID_SAVE) { if (current_time > last_touch_action_time + SAVE_LOAD_COOLDOWN) { save_state(touch_pad.emulator, "save.dat"); last_touch_action_time = current_time; } }
-                    else if (btn->id == BTN_ID_LOAD) { if (current_time > last_touch_action_time + SAVE_LOAD_COOLDOWN) { load_state(touch_pad.emulator, "save.dat"); last_touch_action_time = current_time; } } 
-                    else if (btn->id == BTN_ID_TAS_TOGGLE) touch_pad.show_tas_toolbar = !touch_pad.show_tas_toolbar;
-                    else if (btn->id == BTN_ID_TAS_REC) tas_start_recording(touch_pad.emulator); // CORRIGIDO
-                    else if (btn->id == BTN_ID_TAS_PLAY) tas_start_playback(touch_pad.emulator, 0); // CORRIGIDO
-                    else if (btn->id == BTN_ID_TAS_SLOW) tas_toggle_slow_motion(touch_pad.emulator);
-                    else if (btn->id == BTN_ID_TAS_STEP) tas_step_frame(touch_pad.emulator);
-                    else if (btn->id == BTN_ID_TAS_BOX) tas_open_script_selector(touch_pad.emulator);
-                    else if (!touch_pad.emulator->pause) { key |= btn->id; if(btn->id == TURBO_A) key |= BUTTON_A; if(btn->id == TURBO_B) key |= BUTTON_B; }
+                    
+                    pressed = 1;
+                    btn->active = 1;
+                    btn->finger = event->tfinger.fingerID;
+                    
+                    if (btn->id == BTN_ID_MENU) {
+                        touch_pad.emulator->pause = !touch_pad.emulator->pause;
+                    } else if (btn->id == BTN_ID_SAVE) {
+                        if (current_time > last_touch_action_time + SAVE_LOAD_COOLDOWN) {
+                            save_state(touch_pad.emulator, "save.dat");
+                            last_touch_action_time = current_time;
+                        }
+                    } else if (btn->id == BTN_ID_LOAD) {
+                         if (current_time > last_touch_action_time + SAVE_LOAD_COOLDOWN) {
+                            load_state(touch_pad.emulator, "save.dat");
+                            last_touch_action_time = current_time;
+                        }
+                    } 
+                    else if (btn->id == BTN_ID_TAS_TOGGLE) {
+                        touch_pad.show_tas_toolbar = !touch_pad.show_tas_toolbar;
+                    }
+                    else if (btn->id == BTN_ID_TAS_REC) {
+                        tas_start_recording(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_PLAY) {
+                        tas_start_playback(touch_pad.emulator, 0);
+                    }
+                    else if (btn->id == BTN_ID_TAS_SLOW) {
+                        tas_toggle_slow_motion(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_STEP) {
+                        tas_step_frame(touch_pad.emulator);
+                    }
+                    else if (btn->id == BTN_ID_TAS_BOX) {
+                        tas_open_script_selector(touch_pad.emulator);
+                    }
+                    else if (!touch_pad.emulator->pause) {
+                        key |= btn->id;
+                        if(btn->id == TURBO_A) key |= BUTTON_A;
+                        if(btn->id == TURBO_B) key |= BUTTON_B;
+                    }
                 }
             }
             if(pressed) break;
-            if (!touch_pad.emulator->pause && !touch_pad.edit_mode && x < touch_pad.g_ctx->screen_width / 2) { touch_pad.axis.active = 1; touch_pad.axis.finger = event->tfinger.fingerID; touch_pad.axis.x = touch_pad.axis.inner_x = (int)x; touch_pad.axis.y = touch_pad.axis.inner_y = (int)y; }
+
+            if (!touch_pad.emulator->pause && !touch_pad.edit_mode && x < touch_pad.g_ctx->screen_width / 2) {
+                touch_pad.axis.active = 1;
+                touch_pad.axis.finger = event->tfinger.fingerID;
+                touch_pad.axis.x = touch_pad.axis.inner_x = (int)x;
+                touch_pad.axis.y = touch_pad.axis.inner_y = (int)y;
+            }
             break;
         }
         case SDL_EVENT_FINGER_MOTION: {
             to_abs_position(&x, &y);
-            if (touch_pad.edit_mode && touch_pad.selected_button) { touch_pad.selected_button->x = (int)x; touch_pad.selected_button->y = (int)y; touch_pad.selected_button->dest.x = x - touch_pad.selected_button->dest.w/2; touch_pad.selected_button->dest.y = y - touch_pad.selected_button->dest.h/2; return; }
+            if (touch_pad.edit_mode && touch_pad.selected_button) {
+                touch_pad.selected_button->x = (int)x;
+                touch_pad.selected_button->y = (int)y;
+                touch_pad.selected_button->dest.x = x - touch_pad.selected_button->dest.w/2;
+                touch_pad.selected_button->dest.y = y - touch_pad.selected_button->dest.h/2;
+                return;
+            }
             if (touch_pad.emulator->pause || !touch_pad.axis.active || touch_pad.axis.finger != event->tfinger.fingerID) break;
+
             int a = angle(touch_pad.axis.x, touch_pad.axis.y, (int)x, (int)y);
             int d = (int)sqrt(pow(x - touch_pad.axis.x, 2) + pow(y - touch_pad.axis.y, 2));
             int r = touch_pad.axis.r + 30;
-            if (d > r) { touch_pad.axis.inner_x = (int)(r * cos(a * M_PI / 180) + touch_pad.axis.x); touch_pad.axis.inner_y = (int)(r * sin(a * M_PI / 180) + touch_pad.axis.y); } else { touch_pad.axis.inner_x = (int)x; touch_pad.axis.inner_y = (int)y; }
+
+            if (d > r) {
+                touch_pad.axis.inner_x = (int)(r * cos(a * M_PI / 180) + touch_pad.axis.x);
+                touch_pad.axis.inner_y = (int)(r * sin(a * M_PI / 180) + touch_pad.axis.y);
+            } else {
+                touch_pad.axis.inner_x = (int)x;
+                touch_pad.axis.inner_y = (int)y;
+            }
             update_joy_pos();
-            if (d > touch_pad.axis.r / 2) { if(a < 60 || a > 300) key |= RIGHT; else key &= ~RIGHT; if(a > 30 && a < 150) key |= DOWN; else key &= ~DOWN; if(a > 120 && a < 240) key |= LEFT; else key &= ~LEFT; if(a > 210 && a < 330) key |= UP; else key &= ~UP; } else { key &= ~(RIGHT | LEFT | UP | DOWN); }
+
+            if (d > touch_pad.axis.r / 2) {
+                if(a < 60 || a > 300) key |= RIGHT; else key &= ~RIGHT;
+                if(a > 30 && a < 150) key |= DOWN; else key &= ~DOWN;
+                if(a > 120 && a < 240) key |= LEFT; else key &= ~LEFT;
+                if(a > 210 && a < 330) key |= UP; else key &= ~UP;
+            } else {
+                 key &= ~(RIGHT | LEFT | UP | DOWN);
+            }
         }
     }
     joyPad->status = key;
