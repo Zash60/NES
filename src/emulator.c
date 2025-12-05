@@ -259,22 +259,42 @@ void load_state(Emulator* emulator, const char* unused) {
     }
 
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
-        if (emulator->movie.guid != sv_header.movie_guid) { LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); fclose(f); return; }
+        if (emulator->movie.guid != sv_header.movie_guid) { 
+            // Em modo TAS, GUID diferente é fatal, pois são filmes diferentes
+            LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
+            fclose(f); return; 
+        }
 
         FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
         if (sv_header.movie_guid != 0) {
             fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
         }
         
+        // --- FIX: Removido o bloqueio por timeline mismatch ---
+        // O código original verificava memcmp e dava return.
+        // Aqui nós removemos essa checagem para permitir "re-recording".
+        // Se a timeline for diferente (inputs diferentes), nós sobrescrevemos o histórico.
+        
         uint32_t min_len = (sv_header.savestate_frame_count < emulator->movie.frame_count) ? sv_header.savestate_frame_count : emulator->movie.frame_count;
-        if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) { LOG(ERROR, "Savestate timeline mismatch!"); free(savestate_movie_frames); fclose(f); return; }
-
+        if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) {
+             LOG(INFO, "TAS: Timeline divergence detected. Overwriting history with savestate data.");
+        }
+        
         if (emulator->movie.read_only) {
-            if (sv_header.movie_length > emulator->movie.frame_count) { LOG(ERROR, "Cannot load future state in read-only mode!"); free(savestate_movie_frames); fclose(f); return; }
+            if (sv_header.movie_length > emulator->movie.frame_count) { 
+                LOG(ERROR, "Cannot load future state in read-only mode!"); 
+                free(savestate_movie_frames); 
+                fclose(f); 
+                return; 
+            }
         } else {
+            // Modo de Gravação: Restaura o filme do save state para a memória
             emulator->movie.frame_count = sv_header.movie_length;
             memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
+            
             emulator->movie.mode = MOVIE_MODE_RECORDING;
+            
+            // Marca para truncar o filme se carregamos um estado anterior ao fim atual
             if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
                 emulator->needs_truncation = 1;
             }
