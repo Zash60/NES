@@ -376,9 +376,9 @@ void load_state(Emulator* emulator, const char* unused) {
             fclose(f); return; 
         }
 
-        FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
-        if (sv_header.movie_guid != 0) {
-            // Seek to end where frames are
+        FrameInput* savestate_movie_frames = calloc(sv_head        if (sv_header.movie_guid != 0) {
+            // Sincronizar o índice do frame ANTES de qualquer lógica de truncagem/cópia
+            emulator->current_frame_index = sv_header.savestate_frame_count;s are
             long pos = ftell(f);
             fseek(f, 0, SEEK_END);
             long end = ftell(f);
@@ -394,7 +394,9 @@ void load_state(Emulator* emulator, const char* unused) {
         }
         
         if (emulator->movie.read_only) {
-            if (sv_header.movie_length > emulator->movie.frame_count) { 
+            // Em read-only, apenas o índice do frame é restaurado.
+            // O estado salvo não pode estar à frente do movie atual.
+            if (sv_header.savestate_frame_count > emulator->movie.frame_count) { 
                 LOG(ERROR, "Cannot load future state in read-only mode!"); 
                 free(savestate_movie_frames); 
                 fclose(f); 
@@ -424,6 +426,7 @@ void load_state(Emulator* emulator, const char* unused) {
 
         emulator->movie.mode = MOVIE_MODE_PLAYBACK;
         emulator->movie.read_only = 1;
+        emulator->current_frame_index = sv_header.savestate_frame_count; // Sincronizar índice do frame
     }
 
     SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
@@ -475,7 +478,10 @@ void load_state(Emulator* emulator, const char* unused) {
     if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
     if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
 
-    emulator->current_frame_index = sv_header.savestate_frame_count;
+    // O índice do frame é sincronizado na lógica TAS acima, ou será restaurado aqui se não houver movie.
+    if (emulator->movie.mode == MOVIE_MODE_INACTIVE) {
+        emulator->current_frame_index = sv_header.savestate_frame_count;
+    }
 
     if (emulator->movie.mode == MOVIE_MODE_PLAYBACK && emulator->current_frame_index >= emulator->movie.frame_count) {
         emulator->movie.mode = MOVIE_MODE_FINISHED;
