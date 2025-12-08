@@ -149,40 +149,23 @@ static void render_fps_text(GraphicsContext* ctx, float fps) {
 }
 
 // ----------------------------------------------------------------------
-// TAS OSD & Input Display Implementation
+// TAS OSD - OTIMIZADO (Sem renderização de texto por frame para inputs)
 // ----------------------------------------------------------------------
 
-static void draw_input_indicator(SDL_Renderer* r, float x, float y, float w, float h, const char* label, int active, SDL_Color on_color, TTF_Font* font) {
+static void draw_input_indicator(SDL_Renderer* r, float x, float y, float w, float h, int active, SDL_Color on_color) {
     SDL_FRect rect = {x, y, w, h};
     
-    // Background
     if (active) {
-        SDL_SetRenderDrawColor(r, on_color.r, on_color.g, on_color.b, 200);
+        SDL_SetRenderDrawColor(r, on_color.r, on_color.g, on_color.b, 200); // Brilhante quando ativo
         SDL_RenderFillRect(r, &rect);
     } else {
-        SDL_SetRenderDrawColor(r, 20, 20, 20, 150);
+        SDL_SetRenderDrawColor(r, 40, 40, 40, 100); // Escuro transparente quando inativo
         SDL_RenderFillRect(r, &rect);
     }
     
-    // Border
-    SDL_SetRenderDrawColor(r, 180, 180, 180, 200);
+    // Borda
+    SDL_SetRenderDrawColor(r, 150, 150, 150, 150);
     SDL_RenderRect(r, &rect);
-
-    // Label
-    if (font && label) {
-        SDL_Color txt_col = {255, 255, 255, 255};
-        SDL_Surface* surf = TTF_RenderText_Solid(font, label, 0, txt_col);
-        if(surf){
-            SDL_Texture* tx = SDL_CreateTextureFromSurface(r, surf);
-            float tw = (float)surf->w;
-            float th = (float)surf->h;
-            // Center text
-            SDL_FRect tdest = {x + (w - tw)/2, y + (h - th)/2, tw, th};
-            SDL_RenderTexture(r, tx, NULL, &tdest);
-            SDL_DestroyTexture(tx);
-            SDL_DestroySurface(surf);
-        }
-    }
 }
 
 static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
@@ -191,7 +174,7 @@ static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
 
     SDL_Renderer* r = g_ctx->renderer;
     
-    // 1. Status Text
+    // 1. Texto de Status (FPS e Frame Count) - Isso é leve pois é só uma string
     char osd_text[64];
     SDL_Color status_color = {255, 255, 255, 255};
     const char* mode_str = "";
@@ -204,9 +187,7 @@ static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
         case MOVIE_MODE_PLAYBACK:  
             mode_str = "PLAY"; 
             status_color = (SDL_Color){50, 255, 50, 255}; 
-            if (emu->movie.read_only) {
-               mode_str = "PLAY [R/O]";
-            }
+            if (emu->movie.read_only) mode_str = "PLAY [R/O]";
             break;
         case MOVIE_MODE_FINISHED:  
             mode_str = "FIN";  
@@ -222,7 +203,7 @@ static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
         SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
         SDL_FRect dst = {
             (float)g_ctx->screen_width - surf->w - 20, 
-            60.0f, // Um pouco abaixo do FPS
+            60.0f, 
             (float)surf->w, 
             (float)surf->h
         };
@@ -231,13 +212,11 @@ static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
         SDL_DestroySurface(surf);
     }
 
-    // 2. Input Visualizer
-    // Vamos desenhar os inputs do Player 1
+    // 2. Visualizador de Input (Otimizado: Sem Texto)
     uint16_t joy = emu->mem.joy1.status;
     
-    // Configurações de layout
 #ifdef __ANDROID__
-    float btn_size = g_ctx->screen_height * 0.05f;
+    float btn_size = g_ctx->screen_height * 0.04f; // Um pouco menor para não poluir
 #else
     float btn_size = 20.0f;
 #endif
@@ -245,33 +224,28 @@ static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
     float start_x = 20.0f;
     float start_y = 100.0f; 
 
-    // Cores
     SDL_Color c_dpad = {200, 200, 200, 255};
     SDL_Color c_sel  = {100, 100, 255, 255};
     SDL_Color c_btn  = {255, 50, 50, 255};
 
-    // D-Pad Grid (3x3 logic)
-    // Up
-    draw_input_indicator(r, start_x + btn_size + gap, start_y, btn_size, btn_size, "^", joy & UP, c_dpad, NULL);
-    // Left
-    draw_input_indicator(r, start_x, start_y + btn_size + gap, btn_size, btn_size, "<", joy & LEFT, c_dpad, NULL);
-    // Down
-    draw_input_indicator(r, start_x + btn_size + gap, start_y + (btn_size + gap)*2, btn_size, btn_size, "v", joy & DOWN, c_dpad, NULL);
-    // Right
-    draw_input_indicator(r, start_x + (btn_size + gap)*2, start_y + btn_size + gap, btn_size, btn_size, ">", joy & RIGHT, c_dpad, NULL);
+    // D-Pad (Cima, Esquerda, Baixo, Direita)
+    draw_input_indicator(r, start_x + btn_size + gap, start_y, btn_size, btn_size, joy & UP, c_dpad);
+    draw_input_indicator(r, start_x, start_y + btn_size + gap, btn_size, btn_size, joy & LEFT, c_dpad);
+    draw_input_indicator(r, start_x + btn_size + gap, start_y + (btn_size + gap)*2, btn_size, btn_size, joy & DOWN, c_dpad);
+    draw_input_indicator(r, start_x + (btn_size + gap)*2, start_y + btn_size + gap, btn_size, btn_size, joy & RIGHT, c_dpad);
 
     float mid_x = start_x + (btn_size + gap)*3 + 10;
     float mid_y = start_y + btn_size + gap;
     
-    // Select / Start
-    draw_input_indicator(r, mid_x, mid_y, btn_size * 2, btn_size * 0.7f, "SEL", joy & SELECT, c_sel, g_ctx->font);
-    draw_input_indicator(r, mid_x + btn_size*2 + gap, mid_y, btn_size * 2, btn_size * 0.7f, "STA", joy & START, c_sel, g_ctx->font);
+    // Select / Start (Barras horizontais)
+    draw_input_indicator(r, mid_x, mid_y, btn_size * 1.5f, btn_size * 0.7f, joy & SELECT, c_sel);
+    draw_input_indicator(r, mid_x + btn_size*1.5f + gap, mid_y, btn_size * 1.5f, btn_size * 0.7f, joy & START, c_sel);
 
-    float action_x = mid_x + (btn_size*2 + gap)*2 + 10;
+    float action_x = mid_x + (btn_size*1.5f + gap)*2 + 10;
     
     // B / A
-    draw_input_indicator(r, action_x, mid_y, btn_size, btn_size, "B", joy & BUTTON_B, c_btn, g_ctx->font);
-    draw_input_indicator(r, action_x + btn_size + gap, mid_y, btn_size, btn_size, "A", joy & BUTTON_A, c_btn, g_ctx->font);
+    draw_input_indicator(r, action_x, mid_y, btn_size, btn_size, joy & BUTTON_B, c_btn);
+    draw_input_indicator(r, action_x + btn_size + gap, mid_y, btn_size, btn_size, joy & BUTTON_A, c_btn);
 }
 
 void free_graphics(GraphicsContext* ctx){
