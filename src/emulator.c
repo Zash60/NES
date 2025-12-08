@@ -376,9 +376,10 @@ void load_state(Emulator* emulator, const char* unused) {
             fclose(f); return; 
         }
 
-        FrameInput* savestate_movie_frames = calloc(sv_head        if (sv_header.movie_guid != 0) {
+        FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
+        if (sv_header.movie_guid != 0) {
             // Sincronizar o índice do frame ANTES de qualquer lógica de truncagem/cópia
-            emulator->current_frame_index = sv_header.savestate_frame_count;s are
+            emulator->current_frame_index = sv_header.savestate_frame_count;
             long pos = ftell(f);
             fseek(f, 0, SEEK_END);
             long end = ftell(f);
