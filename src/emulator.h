@@ -45,6 +45,7 @@ typedef struct {
     TASMovieMode mode;          // Modo atual (Inactive, Play, Record, Finished)
     uint8_t read_only;          // Se o filme pode ser modificado ao carregar um estado
     uint32_t frame_count;       // Comprimento total do filme
+    uint32_t rom_checksum;      // Hash simples do nome da ROM para validação
     FrameInput* frames; 
 } TASMovie;
 
@@ -102,6 +103,7 @@ void tas_init(Emulator* emu);
 void tas_start_recording(Emulator* emu);
 void tas_stop_movie(Emulator* emu);
 void tas_start_playback(Emulator* emu, int read_only);
+void tas_toggle_read_only(Emulator* emu); // Nova função
 void tas_toggle_slow_motion(Emulator* emu);
 void tas_step_frame(Emulator* emu);
 void tas_open_script_selector(Emulator* emu);
