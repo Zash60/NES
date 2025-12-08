@@ -164,10 +164,10 @@ void tas_load_movie(Emulator* emu, const char* filename) {
 void tas_start_recording(Emulator* emu) {
     LOG(INFO, "TAS: Recording Started");
     
-    // CORREÇÃO CRÍTICA: Limpar memória do filme anterior para evitar lixo
+    // CORREÇÃO CRÍTICA: Limpar memória do filme anterior
     memset(emu->movie.frames, 0, MAX_MOVIE_FRAMES * sizeof(FrameInput));
     
-    // Limpar estado atual dos controles para evitar inputs "presos"
+    // Limpar estado atual dos controles
     emu->mem.joy1.status = 0;
     emu->mem.joy2.status = 0;
 
@@ -201,7 +201,6 @@ void tas_start_playback(Emulator* emu, int read_only) {
         emu->movie.read_only = read_only;
         emu->current_frame_index = 0;
         
-        // Limpar controles antes de começar
         emu->mem.joy1.status = 0;
         emu->mem.joy2.status = 0;
 
@@ -277,7 +276,6 @@ void save_state(Emulator* emulator, const char* unused) {
     fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
-    
     fwrite(&emulator->mem.joy1, sizeof(JoyPad), 1, f);
     fwrite(&emulator->mem.joy2, sizeof(JoyPad), 1, f);
 
@@ -288,6 +286,7 @@ void save_state(Emulator* emulator, const char* unused) {
     fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
     if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
     
+    // Gravação SEQUENCIAL dos frames ao final
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
         fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
     }
@@ -312,89 +311,101 @@ void load_state(Emulator* emulator, const char* unused) {
         fclose(f); return; 
     }
 
-    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
-        if (emulator->movie.guid != sv_header.movie_guid) { 
-            LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
-            fclose(f); return; 
-        }
-
-        FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
-        if (sv_header.movie_guid != 0) {
-            fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
-        }
-        
-        if (emulator->movie.read_only) {
-            if (sv_header.movie_length > emulator->movie.frame_count) { 
-                LOG(ERROR, "Cannot load future state in read-only mode!"); 
-                free(savestate_movie_frames); 
-                fclose(f); 
-                return; 
-            }
-        } else {
-            emulator->movie.frame_count = sv_header.movie_length;
-            memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
-            
-            if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
-                emulator->needs_truncation = 1;
-            }
-        }
-        free(savestate_movie_frames);
-    } else if (sv_header.movie_guid != 0) {
-        emulator->movie.guid = sv_header.movie_guid;
-        emulator->movie.frame_count = sv_header.movie_length;
-        fread(emulator->movie.frames, sizeof(FrameInput), sv_header.movie_length, f);
-        emulator->movie.mode = MOVIE_MODE_PLAYBACK;
-        emulator->movie.read_only = 1;
-    }
-
-    SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
-    SDL_LockAudioStream(emulator->g_ctx.audio_stream); SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    // CORREÇÃO CRÍTICA: Leitura sequencial para não ler lixo.
+    // 1. Carregar Componentes Principais
     
-    fseek(f, sizeof(SaveHeader_v5), SEEK_SET);
-
-    CPUSnapshot cpu_snap; fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
+    SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    SDL_LockAudioStream(emulator->g_ctx.audio_stream); 
+    SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    
+    CPUSnapshot cpu_snap; 
+    fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
     
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
     
-    // IMPORTANTE: Se o joypad salvo estiver com botões pressionados, isso pode causar o bug "tudo apertado".
-    // Aqui resetamos para 0 ao carregar, a menos que estejamos reproduzindo um filme (onde o input vem do filme de qualquer jeito).
     JoyPad temp_j1, temp_j2;
     if (fread(&temp_j1, sizeof(JoyPad), 1, f) != 1) memset(&temp_j1, 0, sizeof(JoyPad));
     if (fread(&temp_j2, sizeof(JoyPad), 1, f) != 1) memset(&temp_j2, 0, sizeof(JoyPad));
     
-    emulator->mem.joy1 = temp_j1;
-    emulator->mem.joy2 = temp_j2;
-
-    // Reset joypad indexes/strobe para garantir leitura limpa
+    // Restaurar Joypads
+    emulator->mem.joy1.status = temp_j1.status;
+    emulator->mem.joy2.status = temp_j2.status;
     emulator->mem.joy1.index = 0; emulator->mem.joy1.strobe = 0;
     emulator->mem.joy2.index = 0; emulator->mem.joy2.strobe = 0;
 
-    PPUSnapshot ppu_snap; fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
-    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
+    PPUSnapshot ppu_snap; 
+    fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); 
+    memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); 
+    memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
     emulator->ppu.ctrl = ppu_snap.ctrl; emulator->ppu.mask = ppu_snap.mask; emulator->ppu.status = ppu_snap.status; emulator->ppu.oam_address = ppu_snap.oam_address;
     emulator->ppu.v = ppu_snap.v; emulator->ppu.t = ppu_snap.t; emulator->ppu.x = ppu_snap.x; emulator->ppu.w = ppu_snap.w; emulator->ppu.buffer = ppu_snap.buffer;
-    fread(&emulator->apu, sizeof(APU), 1, f); emulator->apu.emulator = emulator; emulator->apu.audio_start = 0; emulator->apu.sampler.index = 0;
-    MapperSnapshot map_snap; fread(&map_snap, sizeof(MapperSnapshot), 1, f);
+    
+    fread(&emulator->apu, sizeof(APU), 1, f); 
+    emulator->apu.emulator = emulator; 
+    emulator->apu.audio_start = 0; 
+    emulator->apu.sampler.index = 0;
+    
+    // 2. Carregar Mapper
+    MapperSnapshot map_snap; 
+    fread(&map_snap, sizeof(MapperSnapshot), 1, f);
     Mapper* m = &emulator->mapper;
     if (m->PRG_ROM) m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
     if (m->CHR_ROM) m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
     set_mirroring(m, map_snap.mirroring);
     if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
-    if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
+    
+    if (m->PRG_RAM && m->RAM_size > 0) {
+        size_t size_to_read = (map_snap.ram_size < m->RAM_size) ? map_snap.ram_size : m->RAM_size;
+        fread(m->PRG_RAM, 1, size_to_read, f);
+        if (map_snap.ram_size > size_to_read) fseek(f, map_snap.ram_size - size_to_read, SEEK_CUR);
+    }
+
+    // 3. Carregar Movie Data (AGORA SIM, no final do arquivo)
+    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
+        if (emulator->movie.guid != sv_header.movie_guid) { 
+            LOG(WARN, "TAS: Savestate GUID mismatch!");
+        }
+        
+        if (sv_header.movie_length > 0) {
+            FrameInput* loaded_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
+            if (loaded_frames) {
+                size_t read_frames = fread(loaded_frames, sizeof(FrameInput), sv_header.movie_length, f);
+                
+                if (read_frames == sv_header.movie_length) {
+                    if (emulator->movie.read_only) {
+                         // Apenas leitura (Playback): Mantemos filme original, apenas verificamos
+                    } else {
+                        // Gravação: Restauramos histórico
+                        if (sv_header.movie_length <= MAX_MOVIE_FRAMES) {
+                            memcpy(emulator->movie.frames, loaded_frames, sv_header.movie_length * sizeof(FrameInput));
+                            emulator->movie.frame_count = sv_header.movie_length;
+                            
+                            if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
+                                emulator->needs_truncation = 1;
+                            }
+                        }
+                    }
+                }
+                free(loaded_frames);
+            }
+        }
+    }
 
     emulator->current_frame_index = sv_header.savestate_frame_count;
-    
-    if (sv_header.savestate_frame_count >= sv_header.movie_length && sv_header.movie_guid != 0 && emulator->movie.read_only) {
+
+    if (emulator->movie.mode == MOVIE_MODE_PLAYBACK && emulator->current_frame_index >= emulator->movie.frame_count) {
         emulator->movie.mode = MOVIE_MODE_FINISHED;
-    } else if (emulator->movie.mode == MOVIE_MODE_FINISHED && sv_header.savestate_frame_count < sv_header.movie_length) {
+    } else if (emulator->movie.mode == MOVIE_MODE_FINISHED && emulator->current_frame_index < emulator->movie.frame_count) {
         emulator->movie.mode = MOVIE_MODE_PLAYBACK;
     }
 
     emulator->ppu.render = 1;
     fclose(f);
-    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
-    LOG(INFO, "State Loaded! Resuming at frame %d", emulator->current_frame_index);
+    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); 
+    SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    LOG(INFO, "State Loaded! Frame: %d", emulator->current_frame_index);
 }
 
 
@@ -534,13 +545,10 @@ void run_emulator(struct Emulator* emulator){
             if(emulator->pause && !emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_menu_touch((int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height), emulator);
             }
-            
-            // CORREÇÃO: Impedir input manual durante playback a menos que seja para parar/pausar
             if (emulator->movie.mode != MOVIE_MODE_PLAYBACK) {
                 update_joypad(j1, &e); 
                 update_joypad(j2, &e);
             }
-            
             if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) emulator->exit = 1;
             if(e.type == SDL_EVENT_KEY_DOWN && (e.key.key == SDLK_AC_BACK || e.key.scancode == SDL_SCANCODE_AC_BACK)) {
                 if(emulator->show_script_selector) emulator->show_script_selector = 0;
@@ -552,9 +560,9 @@ void run_emulator(struct Emulator* emulator){
                     case SDLK_F2: tas_start_playback(emulator, 0); break;
                     case SDLK_F3: tas_start_playback(emulator, 1); break;
                     case SDLK_F4: tas_stop_movie(emulator); break;
-                    case SDLK_F5: tas_toggle_read_only(emulator); break; // ALTERNA TAKEOVER
-                    case SDLK_F6: save_state(emulator, NULL); break;     // Quick Save
-                    case SDLK_F9: load_state(emulator, NULL); break;     // Quick Load
+                    case SDLK_F5: tas_toggle_read_only(emulator); break;
+                    case SDLK_F6: save_state(emulator, NULL); break;
+                    case SDLK_F9: load_state(emulator, NULL); break;
                     case SDLK_F7: tas_toggle_slow_motion(emulator); break;
                     case SDLK_F8: tas_open_script_selector(emulator); break;
                     case SDLK_P:  tas_step_frame(emulator); break;
@@ -567,14 +575,12 @@ void run_emulator(struct Emulator* emulator){
 
         if((!emulator->pause || emulator->step_frame) && !emulator->show_script_selector){
             
-            // Lógica de Truncamento ao carregar save state antigo durante gravação
             if (emulator->needs_truncation && emulator->movie.mode == MOVIE_MODE_RECORDING) {
                 LOG(INFO, "TAS: Timeline truncated at frame %d", emulator->current_frame_index);
                 emulator->movie.frame_count = emulator->current_frame_index;
                 emulator->needs_truncation = 0;
             }
 
-            // Lógica Unificada de Input TAS
             if (emulator->movie.mode == MOVIE_MODE_PLAYBACK) {
                 if (emulator->current_frame_index < emulator->movie.frame_count) {
                     j1->status = emulator->movie.frames[emulator->current_frame_index].joy1_status;
@@ -586,11 +592,9 @@ void run_emulator(struct Emulator* emulator){
             } 
             else if (emulator->movie.mode == MOVIE_MODE_RECORDING) {
                 if (emulator->current_frame_index < MAX_MOVIE_FRAMES) {
-                    // Grava o input atual do usuário no filme
                     emulator->movie.frames[emulator->current_frame_index].joy1_status = j1->status;
                     emulator->movie.frames[emulator->current_frame_index].joy2_status = j2->status;
                     
-                    // Se estamos gravando além do fim atual, aumenta a contagem
                     if (emulator->current_frame_index >= emulator->movie.frame_count) {
                         emulator->movie.frame_count = emulator->current_frame_index + 1;
                     }
