@@ -47,13 +47,21 @@ void toggle_edit_mode();
 uint8_t is_edit_mode();
 #include "tas.h"
 
-
 void tas_load_script_absolute(Emulator* emu, const char* full_path);
 void init_menu_layout(int screen_w, int screen_h);
 void render_pause_menu(GraphicsContext* g_ctx);
 void handle_menu_touch(int x, int y, Emulator* emu);
 void create_default_script(Emulator* emu);
 extern int is_tas_toolbar_open();
+
+// --- Helper de Checksum simples ---
+static uint32_t calculate_string_hash(const char* str) {
+    uint32_t hash = 5381;
+    int c;
+    while ((c = *str++))
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    return hash;
+}
 
 // --- FUNÇÕES DE IMPLEMENTAÇÃO ---
 
@@ -102,6 +110,8 @@ void tas_init(Emulator* emu) {
     emu->movie.read_only = 0;
     emu->movie.frame_count = 0;
     emu->movie.guid = 0;
+    emu->movie.rom_checksum = 0; // Inicializa zero
+    
     emu->current_frame_index = 0;
     emu->needs_truncation = 0;
     emu->step_frame = 0;
@@ -120,8 +130,11 @@ void tas_save_movie(Emulator* emu, const char* filename) {
         uint32_t magic = TAS_HEADER_MAGIC;
         fwrite(&magic, sizeof(uint32_t), 1, f);
         fwrite(&emu->movie.frame_count, sizeof(uint32_t), 1, f);
+        // Salva o checksum da ROM
+        fwrite(&emu->movie.rom_checksum, sizeof(uint32_t), 1, f); 
         fwrite(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         fclose(f);
+        LOG(INFO, "TAS: Movie saved to %s", filename);
     }
 }
 
@@ -134,6 +147,15 @@ void tas_load_movie(Emulator* emu, const char* filename) {
         fread(&magic, sizeof(uint32_t), 1, f);
         if (magic == TAS_HEADER_MAGIC) {
             fread(&emu->movie.frame_count, sizeof(uint32_t), 1, f);
+            
+            uint32_t file_checksum;
+            fread(&file_checksum, sizeof(uint32_t), 1, f);
+            
+            // Validação da ROM
+            if (file_checksum != 0 && file_checksum != emu->movie.rom_checksum) {
+                LOG(WARN, "TAS: Movie ROM mismatch! File Checksum: %08X, Current: %08X", file_checksum, emu->movie.rom_checksum);
+            }
+
             if (emu->movie.frame_count > MAX_MOVIE_FRAMES) emu->movie.frame_count = MAX_MOVIE_FRAMES;
             fread(emu->movie.frames, sizeof(FrameInput), emu->movie.frame_count, f);
         }
@@ -147,14 +169,17 @@ void tas_start_recording(Emulator* emu) {
     emu->movie.read_only = 0;
     emu->movie.guid = generate_guid();
     emu->movie.frame_count = 0;
+    emu->movie.rom_checksum = calculate_string_hash(emu->rom_name);
     emu->current_frame_index = 0;
     reset_emulator(emu);
 }
 
 void tas_stop_movie(Emulator* emu) {
-    LOG(INFO, "TAS: Movie Stopped");
     if (emu->movie.mode == MOVIE_MODE_RECORDING) {
         tas_save_movie(emu, "recording.tas");
+        LOG(INFO, "TAS: Recording Stopped and Saved");
+    } else {
+        LOG(INFO, "TAS: Playback Stopped");
     }
     emu->movie.mode = MOVIE_MODE_INACTIVE;
     emu->movie.guid = 0;
@@ -172,6 +197,23 @@ void tas_start_playback(Emulator* emu, int read_only) {
         reset_emulator(emu);
     } else {
         LOG(WARN, "TAS: No movie data to play");
+    }
+}
+
+void tas_toggle_read_only(Emulator* emu) {
+    if (emu->movie.mode == MOVIE_MODE_PLAYBACK || emu->movie.mode == MOVIE_MODE_FINISHED) {
+        emu->movie.read_only = !emu->movie.read_only;
+        if (!emu->movie.read_only) {
+            // "Takeover": Muda para modo gravação a partir do ponto atual
+            emu->movie.mode = MOVIE_MODE_RECORDING;
+            LOG(INFO, "TAS: Takeover! Recording from frame %d", emu->current_frame_index);
+            
+            // Opcional: Truncar frames futuros se quiser reescrever a história imediatamente
+            // emu->movie.frame_count = emu->current_frame_index; 
+        } else {
+             emu->movie.mode = MOVIE_MODE_PLAYBACK;
+             LOG(INFO, "TAS: Switched to Read-Only Mode");
+        }
     }
 }
 
@@ -229,7 +271,6 @@ void save_state(Emulator* emulator, const char* unused) {
     
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
     
-    // Salva também o estado dos controles para evitar bugs de "botão preso"
     fwrite(&emulator->mem.joy1, sizeof(JoyPad), 1, f);
     fwrite(&emulator->mem.joy2, sizeof(JoyPad), 1, f);
 
@@ -240,6 +281,7 @@ void save_state(Emulator* emulator, const char* unused) {
     fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
     if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
     
+    // Salvar o filme inteiro no savestate para consistência total
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
         fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
     }
@@ -265,6 +307,7 @@ void load_state(Emulator* emulator, const char* unused) {
     }
 
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
+        // Verifica GUID para garantir que estamos no mesmo filme
         if (emulator->movie.guid != sv_header.movie_guid) { 
             LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
             fclose(f); return; 
@@ -275,12 +318,7 @@ void load_state(Emulator* emulator, const char* unused) {
             fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
         }
         
-        // FIX: Permite sobrescrever o histórico de inputs para re-recording
-        uint32_t min_len = (sv_header.savestate_frame_count < emulator->movie.frame_count) ? sv_header.savestate_frame_count : emulator->movie.frame_count;
-        if (memcmp(emulator->movie.frames, savestate_movie_frames, min_len * sizeof(FrameInput)) != 0) {
-             LOG(INFO, "TAS: Timeline divergence detected. Overwriting history with savestate data.");
-        }
-
+        // Em modo leitura, não podemos voltar para o futuro se o filme for menor
         if (emulator->movie.read_only) {
             if (sv_header.movie_length > emulator->movie.frame_count) { 
                 LOG(ERROR, "Cannot load future state in read-only mode!"); 
@@ -289,19 +327,19 @@ void load_state(Emulator* emulator, const char* unused) {
                 return; 
             }
         } else {
-            // Restaura o filme do save para a memória (sobrescreve o histórico atual)
+            // Em modo gravação/edição, restauramos o estado do filme do save
+            // Isso permite "desfazer" gravações ruins carregando um save antigo
             emulator->movie.frame_count = sv_header.movie_length;
             memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
             
-            emulator->movie.mode = MOVIE_MODE_RECORDING;
-            
-            // Marca para truncar se voltamos no tempo
+            // Se voltamos no tempo, precisamos truncar a gravação futura
             if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
                 emulator->needs_truncation = 1;
             }
         }
         free(savestate_movie_frames);
     } else if (sv_header.movie_guid != 0) {
+        // Carrega filme do savestate se não houver um ativo
         emulator->movie.guid = sv_header.movie_guid;
         emulator->movie.frame_count = sv_header.movie_length;
         fread(emulator->movie.frames, sizeof(FrameInput), sv_header.movie_length, f);
@@ -312,6 +350,10 @@ void load_state(Emulator* emulator, const char* unused) {
     SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
     SDL_LockAudioStream(emulator->g_ctx.audio_stream); SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
     
+    fseek(f, sizeof(SaveHeader_v5), SEEK_SET); // Pula header de filme já lido acima (tecnicamente redundante, mas seguro)
+    // Ajuste fino do seek se necessário dependendo da estrutura exata de leitura acima, 
+    // mas como a struct do filme está no final do arquivo, precisamos pular o cabeçalho base apenas.
+    // Correção: fseek deve ir para APÓS o cabeçalho base.
     fseek(f, sizeof(SaveHeader_v5), SEEK_SET);
 
     CPUSnapshot cpu_snap; fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
@@ -319,7 +361,6 @@ void load_state(Emulator* emulator, const char* unused) {
     
     fread(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
     
-    // Tenta ler o estado dos joypads, se falhar ou arquivo antigo, reseta
     if (fread(&emulator->mem.joy1, sizeof(JoyPad), 1, f) != 1) {
         emulator->mem.joy1.index = 0; emulator->mem.joy1.strobe = 0; emulator->mem.joy1.status = 0;
     }
@@ -327,7 +368,7 @@ void load_state(Emulator* emulator, const char* unused) {
         emulator->mem.joy2.index = 0; emulator->mem.joy2.strobe = 0; emulator->mem.joy2.status = 0;
     }
 
-    // FORÇA RESET DOS ÍNDICES DE LEITURA DO CONTROLE (CRUCIAL PARA EVITAR START PRESSIONADO)
+    // Reset joypad indexes
     emulator->mem.joy1.index = 0;
     emulator->mem.joy1.strobe = 0;
     emulator->mem.joy2.index = 0;
@@ -347,8 +388,13 @@ void load_state(Emulator* emulator, const char* unused) {
     if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
 
     emulator->current_frame_index = sv_header.savestate_frame_count;
+    
+    // Se estávamos tocando e chegamos ao fim, marca como terminado
     if (sv_header.savestate_frame_count >= sv_header.movie_length && sv_header.movie_guid != 0 && emulator->movie.read_only) {
         emulator->movie.mode = MOVIE_MODE_FINISHED;
+    } else if (emulator->movie.mode == MOVIE_MODE_FINISHED && sv_header.savestate_frame_count < sv_header.movie_length) {
+        // Se voltamos de um estado finalizado para antes do fim, retoma playback
+        emulator->movie.mode = MOVIE_MODE_PLAYBACK;
     }
 
     emulator->ppu.render = 1;
@@ -467,6 +513,8 @@ void init_emulator(struct Emulator* emulator, int argc, char *argv[]){
     init_timer(&emulator->timer, PERIOD);
     ANDROID_INIT_TOUCH_PAD(emulator);
     tas_init(emulator);
+    // Calcular Checksum da ROM inicial
+    emulator->movie.rom_checksum = calculate_string_hash(emulator->rom_name);
     create_default_script(emulator);
     if(!emulator->g_ctx.is_tv) init_menu_layout(emulator->g_ctx.screen_width, emulator->g_ctx.screen_height);
 }
@@ -493,10 +541,14 @@ void run_emulator(struct Emulator* emulator){
             if(emulator->pause && !emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_menu_touch((int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height), emulator);
             }
+            
+            // Em modo playback, não permitimos inputs físicos afetarem o joypad diretamente,
+            // A MENOS que tenhamos mudado para "Takeover" (Gravação no meio)
             if (emulator->movie.mode != MOVIE_MODE_PLAYBACK) {
                 update_joypad(j1, &e); 
                 update_joypad(j2, &e);
             }
+            
             if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) emulator->exit = 1;
             if(e.type == SDL_EVENT_KEY_DOWN && (e.key.key == SDLK_AC_BACK || e.key.scancode == SDL_SCANCODE_AC_BACK)) {
                 if(emulator->show_script_selector) emulator->show_script_selector = 0;
@@ -508,6 +560,9 @@ void run_emulator(struct Emulator* emulator){
                     case SDLK_F2: tas_start_playback(emulator, 0); break;
                     case SDLK_F3: tas_start_playback(emulator, 1); break;
                     case SDLK_F4: tas_stop_movie(emulator); break;
+                    case SDLK_F5: tas_toggle_read_only(emulator); break; // ALTERNA TAKEOVER
+                    case SDLK_F6: save_state(emulator, NULL); break;     // Quick Save
+                    case SDLK_F9: load_state(emulator, NULL); break;     // Quick Load
                     case SDLK_F7: tas_toggle_slow_motion(emulator); break;
                     case SDLK_F8: tas_open_script_selector(emulator); break;
                     case SDLK_P:  tas_step_frame(emulator); break;
@@ -520,25 +575,36 @@ void run_emulator(struct Emulator* emulator){
 
         if((!emulator->pause || emulator->step_frame) && !emulator->show_script_selector){
             
-            if (emulator->needs_truncation) {
-                LOG(INFO, "TAS: Movie truncated to frame %d", emulator->current_frame_index);
+            // Lógica de Truncamento ao carregar save state antigo durante gravação
+            if (emulator->needs_truncation && emulator->movie.mode == MOVIE_MODE_RECORDING) {
+                LOG(INFO, "TAS: Timeline truncated at frame %d", emulator->current_frame_index);
                 emulator->movie.frame_count = emulator->current_frame_index;
                 emulator->needs_truncation = 0;
             }
 
-            if (emulator->movie.mode == MOVIE_MODE_RECORDING) {
-                if (emulator->current_frame_index < MAX_MOVIE_FRAMES) {
-                    emulator->movie.frames[emulator->current_frame_index].joy1_status = j1->status;
-                    emulator->movie.frames[emulator->current_frame_index].joy2_status = j2->status;
-                    emulator->movie.frame_count = emulator->current_frame_index + 1;
-                } else { tas_stop_movie(emulator); }
-            } else if (emulator->movie.mode == MOVIE_MODE_PLAYBACK) {
+            // Lógica Unificada de Input TAS
+            if (emulator->movie.mode == MOVIE_MODE_PLAYBACK) {
                 if (emulator->current_frame_index < emulator->movie.frame_count) {
                     j1->status = emulator->movie.frames[emulator->current_frame_index].joy1_status;
                     j2->status = emulator->movie.frames[emulator->current_frame_index].joy2_status;
                 } else {
                     emulator->movie.mode = MOVIE_MODE_FINISHED;
                     LOG(INFO, "TAS: Movie playback finished.");
+                }
+            } 
+            else if (emulator->movie.mode == MOVIE_MODE_RECORDING) {
+                if (emulator->current_frame_index < MAX_MOVIE_FRAMES) {
+                    // Grava o input atual do usuário no filme
+                    emulator->movie.frames[emulator->current_frame_index].joy1_status = j1->status;
+                    emulator->movie.frames[emulator->current_frame_index].joy2_status = j2->status;
+                    
+                    // Se estamos gravando além do fim atual, aumenta a contagem
+                    if (emulator->current_frame_index >= emulator->movie.frame_count) {
+                        emulator->movie.frame_count = emulator->current_frame_index + 1;
+                    }
+                } else {
+                    LOG(WARN, "TAS: Max frames reached, stopping recording.");
+                    tas_stop_movie(emulator);
                 }
             }
             
