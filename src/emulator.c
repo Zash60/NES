@@ -23,7 +23,7 @@ static uint16_t TURBO_SKIP;
 
 #define SAVE_LOAD_COOLDOWN 500
 #define SAVE_MAGIC 0x4E45535C 
-#define SAVE_VERSION 5
+#define SAVE_VERSION 6 // Versão incrementada para suportar PPU Frames
 
 #ifdef __ANDROID__
     #define SCRIPT_PATH "/storage/emulated/0/Android/data/com.barracoder.android/files/"
@@ -164,10 +164,8 @@ void tas_load_movie(Emulator* emu, const char* filename) {
 void tas_start_recording(Emulator* emu) {
     LOG(INFO, "TAS: Recording Started");
     
-    // CORREÇÃO CRÍTICA: Limpar memória do filme anterior
     memset(emu->movie.frames, 0, MAX_MOVIE_FRAMES * sizeof(FrameInput));
     
-    // Limpar estado atual dos controles
     emu->mem.joy1.status = 0;
     emu->mem.joy2.status = 0;
 
@@ -244,10 +242,43 @@ void tas_open_script_selector(Emulator* emu) {
     }
 }
 
-typedef struct { uint32_t magic; uint32_t version; uint64_t movie_guid; uint32_t savestate_frame_count; uint32_t movie_length; } SaveHeader_v5;
-typedef struct { uint16_t pc; uint8_t ac, x, y, sr, sp; size_t t_cycles; } CPUSnapshot;
-typedef struct { uint8_t V_RAM[0x1000]; uint8_t OAM[256]; uint8_t palette[0x20]; uint8_t ctrl, mask, status; uint8_t oam_address; uint16_t v, t; uint8_t x, w; uint8_t buffer; } PPUSnapshot;
-typedef struct { uint64_t prg_ptr_offset; uint64_t chr_ptr_offset; Mirroring mirroring; int has_extension; uint8_t extension_data[2048]; size_t ram_size; } MapperSnapshot;
+// --- SNAPSHOT STRUCTURES ---
+
+typedef struct { 
+    uint32_t magic; 
+    uint32_t version; 
+    uint64_t movie_guid; 
+    uint32_t savestate_frame_count; 
+    uint32_t movie_length; 
+} SaveHeader_v5;
+
+typedef struct { 
+    uint16_t pc; 
+    uint8_t ac, x, y, sr, sp; 
+    size_t t_cycles; 
+} CPUSnapshot;
+
+// ATUALIZADO: Inclui 'frames' para sincronia de ciclo PPU (par/ímpar)
+typedef struct { 
+    uint8_t V_RAM[0x1000]; 
+    uint8_t OAM[256]; 
+    uint8_t palette[0x20]; 
+    uint8_t ctrl, mask, status; 
+    uint8_t oam_address; 
+    uint16_t v, t; 
+    uint8_t x, w; 
+    uint8_t buffer; 
+    uint64_t frames; // IMPORTANTE PARA TAS!
+} PPUSnapshot;
+
+typedef struct { 
+    uint64_t prg_ptr_offset; 
+    uint64_t chr_ptr_offset; 
+    Mirroring mirroring; 
+    int has_extension; 
+    uint8_t extension_data[2048]; 
+    size_t ram_size; 
+} MapperSnapshot;
 
 static void get_slot_filename(Emulator* emu, char* buffer, size_t size) {
     snprintf(buffer, size, "%s%s_slot%d.save", SCRIPT_PATH, emu->rom_name, emu->current_save_slot);
@@ -265,7 +296,7 @@ void save_state(Emulator* emulator, const char* unused) {
 
     SaveHeader_v5 header = { 
         .magic = SAVE_MAGIC, 
-        .version = SAVE_VERSION,
+        .version = SAVE_VERSION, // Usando versão 6 (definida no topo)
         .movie_guid = emulator->movie.guid,
         .savestate_frame_count = emulator->current_frame_index,
         .movie_length = emulator->movie.frame_count
@@ -276,23 +307,49 @@ void save_state(Emulator* emulator, const char* unused) {
     fwrite(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     
     fwrite(emulator->mem.RAM, sizeof(uint8_t), RAM_SIZE, f);
+    
     fwrite(&emulator->mem.joy1, sizeof(JoyPad), 1, f);
     fwrite(&emulator->mem.joy2, sizeof(JoyPad), 1, f);
 
-    PPUSnapshot ppu_snap; memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20); ppu_snap.ctrl = emulator->ppu.ctrl; ppu_snap.mask = emulator->ppu.mask; ppu_snap.status = emulator->ppu.status; ppu_snap.oam_address = emulator->ppu.oam_address; ppu_snap.v = emulator->ppu.v; ppu_snap.t = emulator->ppu.t; ppu_snap.x = emulator->ppu.x; ppu_snap.w = emulator->ppu.w; ppu_snap.buffer = emulator->ppu.buffer;
+    // Preparar PPU Snapshot com contagem de frames
+    PPUSnapshot ppu_snap; 
+    memcpy(ppu_snap.V_RAM, emulator->ppu.V_RAM, 0x1000); 
+    memcpy(ppu_snap.OAM, emulator->ppu.OAM, 256); 
+    memcpy(ppu_snap.palette, emulator->ppu.palette, 0x20); 
+    ppu_snap.ctrl = emulator->ppu.ctrl; 
+    ppu_snap.mask = emulator->ppu.mask; 
+    ppu_snap.status = emulator->ppu.status; 
+    ppu_snap.oam_address = emulator->ppu.oam_address; 
+    ppu_snap.v = emulator->ppu.v; 
+    ppu_snap.t = emulator->ppu.t; 
+    ppu_snap.x = emulator->ppu.x; 
+    ppu_snap.w = emulator->ppu.w; 
+    ppu_snap.buffer = emulator->ppu.buffer;
+    ppu_snap.frames = emulator->ppu.frames; // Salvar frames para alinhar ciclo ímpar/par
     fwrite(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+    
     fwrite(&emulator->apu, sizeof(APU), 1, f);
-    Mapper* m = &emulator->mapper; MapperSnapshot map_snap = {0}; map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0; map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0; map_snap.mirroring = m->mirroring; map_snap.ram_size = m->RAM_size; if (m->extension) { map_snap.has_extension = 1; memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); }
+    
+    Mapper* m = &emulator->mapper; 
+    MapperSnapshot map_snap = {0}; 
+    map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0; 
+    map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0; 
+    map_snap.mirroring = m->mirroring; 
+    map_snap.ram_size = m->RAM_size; 
+    if (m->extension) { 
+        map_snap.has_extension = 1; 
+        memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); 
+    }
     fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
     if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
     
-    // Gravação SEQUENCIAL dos frames ao final
+    // Gravar Movie Data no final
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
         fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
     }
 
     fclose(f);
-    LOG(INFO, "State Saved!");
+    LOG(INFO, "State Saved! (Frame: %d)", (int)emulator->ppu.frames);
 }
 
 void load_state(Emulator* emulator, const char* unused) {
@@ -306,18 +363,75 @@ void load_state(Emulator* emulator, const char* unused) {
     if (!f) return;
 
     SaveHeader_v5 sv_header;
-    if (fread(&sv_header, sizeof(SaveHeader_v5), 1, f) != 1 || sv_header.magic != SAVE_MAGIC || sv_header.version != SAVE_VERSION) { 
+    // Aceita versões 5 (antiga) e 6 (nova)
+    if (fread(&sv_header, sizeof(SaveHeader_v5), 1, f) != 1 || sv_header.magic != SAVE_MAGIC || sv_header.version < 5) { 
         LOG(ERROR, "Incompatible save state!");
         fclose(f); return; 
     }
 
-    // CORREÇÃO CRÍTICA: Leitura sequencial para não ler lixo.
-    // 1. Carregar Componentes Principais
-    
+    // TAS Movie Sync Logic
+    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
+        if (emulator->movie.guid != sv_header.movie_guid) { 
+            LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
+            fclose(f); return; 
+        }
+
+        FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
+        if (sv_header.movie_guid != 0) {
+            // Seek to end where frames are
+            long pos = ftell(f);
+            fseek(f, 0, SEEK_END);
+            long end = ftell(f);
+            long frames_size = sv_header.movie_length * sizeof(FrameInput);
+            
+            // Check if file is big enough
+            if (end >= frames_size) {
+                 fseek(f, end - frames_size, SEEK_SET);
+                 fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
+            }
+            // Restore pos for main load
+            fseek(f, pos, SEEK_SET);
+        }
+        
+        if (emulator->movie.read_only) {
+            if (sv_header.movie_length > emulator->movie.frame_count) { 
+                LOG(ERROR, "Cannot load future state in read-only mode!"); 
+                free(savestate_movie_frames); 
+                fclose(f); 
+                return; 
+            }
+        } else {
+            emulator->movie.frame_count = sv_header.movie_length;
+            memcpy(emulator->movie.frames, savestate_movie_frames, sv_header.movie_length * sizeof(FrameInput));
+            
+            if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
+                emulator->needs_truncation = 1;
+            }
+        }
+        free(savestate_movie_frames);
+    } else if (sv_header.movie_guid != 0) {
+        // Load movie if inactive but save has one
+        emulator->movie.guid = sv_header.movie_guid;
+        emulator->movie.frame_count = sv_header.movie_length;
+        
+        long pos = ftell(f);
+        fseek(f, 0, SEEK_END);
+        long end = ftell(f);
+        long frames_size = sv_header.movie_length * sizeof(FrameInput);
+        fseek(f, end - frames_size, SEEK_SET);
+        fread(emulator->movie.frames, sizeof(FrameInput), sv_header.movie_length, f);
+        fseek(f, pos, SEEK_SET);
+
+        emulator->movie.mode = MOVIE_MODE_PLAYBACK;
+        emulator->movie.read_only = 1;
+    }
+
     SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
-    SDL_LockAudioStream(emulator->g_ctx.audio_stream); 
-    SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
+    SDL_LockAudioStream(emulator->g_ctx.audio_stream); SDL_ClearAudioStream(emulator->g_ctx.audio_stream);
     
+    // Rewind to start reading components sequentially
+    fseek(f, sizeof(SaveHeader_v5), SEEK_SET);
+
     CPUSnapshot cpu_snap; 
     fread(&cpu_snap, sizeof(CPUSnapshot), 1, f);
     emulator->cpu.pc = cpu_snap.pc; emulator->cpu.ac = cpu_snap.ac; emulator->cpu.x = cpu_snap.x; emulator->cpu.y = cpu_snap.y; emulator->cpu.sr = cpu_snap.sr; emulator->cpu.sp = cpu_snap.sp; emulator->cpu.t_cycles = cpu_snap.t_cycles;
@@ -328,70 +442,38 @@ void load_state(Emulator* emulator, const char* unused) {
     if (fread(&temp_j1, sizeof(JoyPad), 1, f) != 1) memset(&temp_j1, 0, sizeof(JoyPad));
     if (fread(&temp_j2, sizeof(JoyPad), 1, f) != 1) memset(&temp_j2, 0, sizeof(JoyPad));
     
-    // Restaurar Joypads
-    emulator->mem.joy1.status = temp_j1.status;
-    emulator->mem.joy2.status = temp_j2.status;
+    emulator->mem.joy1 = temp_j1;
+    emulator->mem.joy2 = temp_j2;
     emulator->mem.joy1.index = 0; emulator->mem.joy1.strobe = 0;
     emulator->mem.joy2.index = 0; emulator->mem.joy2.strobe = 0;
 
+    // Load PPU - Handle Version Differences
     PPUSnapshot ppu_snap; 
-    fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
-    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); 
-    memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); 
-    memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
+    if (sv_header.version >= 6) {
+        fread(&ppu_snap, sizeof(PPUSnapshot), 1, f);
+        emulator->ppu.frames = ppu_snap.frames; // Restore frames count for cycle alignment
+    } else {
+        // Read old size (without uint64_t frames)
+        fread(&ppu_snap, sizeof(PPUSnapshot) - sizeof(uint64_t), 1, f);
+        emulator->ppu.frames = 0; // Fallback for old saves
+    }
+
+    memcpy(emulator->ppu.V_RAM, ppu_snap.V_RAM, 0x1000); memcpy(emulator->ppu.OAM, ppu_snap.OAM, 256); memcpy(emulator->ppu.palette, ppu_snap.palette, 0x20);
     emulator->ppu.ctrl = ppu_snap.ctrl; emulator->ppu.mask = ppu_snap.mask; emulator->ppu.status = ppu_snap.status; emulator->ppu.oam_address = ppu_snap.oam_address;
     emulator->ppu.v = ppu_snap.v; emulator->ppu.t = ppu_snap.t; emulator->ppu.x = ppu_snap.x; emulator->ppu.w = ppu_snap.w; emulator->ppu.buffer = ppu_snap.buffer;
     
     fread(&emulator->apu, sizeof(APU), 1, f); 
     emulator->apu.emulator = emulator; 
-    emulator->apu.audio_start = 0; 
-    emulator->apu.sampler.index = 0;
+    // Não resetar audio_start e sampler.index cegamente, isso causa estalos e drift
+    // emulator->apu.audio_start = 0; emulator->apu.sampler.index = 0; 
     
-    // 2. Carregar Mapper
-    MapperSnapshot map_snap; 
-    fread(&map_snap, sizeof(MapperSnapshot), 1, f);
+    MapperSnapshot map_snap; fread(&map_snap, sizeof(MapperSnapshot), 1, f);
     Mapper* m = &emulator->mapper;
     if (m->PRG_ROM) m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
     if (m->CHR_ROM) m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
     set_mirroring(m, map_snap.mirroring);
     if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
-    
-    if (m->PRG_RAM && m->RAM_size > 0) {
-        size_t size_to_read = (map_snap.ram_size < m->RAM_size) ? map_snap.ram_size : m->RAM_size;
-        fread(m->PRG_RAM, 1, size_to_read, f);
-        if (map_snap.ram_size > size_to_read) fseek(f, map_snap.ram_size - size_to_read, SEEK_CUR);
-    }
-
-    // 3. Carregar Movie Data (AGORA SIM, no final do arquivo)
-    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
-        if (emulator->movie.guid != sv_header.movie_guid) { 
-            LOG(WARN, "TAS: Savestate GUID mismatch!");
-        }
-        
-        if (sv_header.movie_length > 0) {
-            FrameInput* loaded_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
-            if (loaded_frames) {
-                size_t read_frames = fread(loaded_frames, sizeof(FrameInput), sv_header.movie_length, f);
-                
-                if (read_frames == sv_header.movie_length) {
-                    if (emulator->movie.read_only) {
-                         // Apenas leitura (Playback): Mantemos filme original, apenas verificamos
-                    } else {
-                        // Gravação: Restauramos histórico
-                        if (sv_header.movie_length <= MAX_MOVIE_FRAMES) {
-                            memcpy(emulator->movie.frames, loaded_frames, sv_header.movie_length * sizeof(FrameInput));
-                            emulator->movie.frame_count = sv_header.movie_length;
-                            
-                            if (sv_header.savestate_frame_count < emulator->movie.frame_count) {
-                                emulator->needs_truncation = 1;
-                            }
-                        }
-                    }
-                }
-                free(loaded_frames);
-            }
-        }
-    }
+    if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
 
     emulator->current_frame_index = sv_header.savestate_frame_count;
 
@@ -403,8 +485,7 @@ void load_state(Emulator* emulator, const char* unused) {
 
     emulator->ppu.render = 1;
     fclose(f);
-    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); 
-    SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
+    SDL_UnlockAudioStream(emulator->g_ctx.audio_stream); SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
     LOG(INFO, "State Loaded! Frame: %d", emulator->current_frame_index);
 }
 
