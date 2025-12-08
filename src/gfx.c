@@ -12,7 +12,7 @@
 
 int video_filter_mode = 0; 
 
-// Protótipos
+// Protótipos Locais
 static void render_fps_text(GraphicsContext* ctx, float fps);
 static void render_scanlines(GraphicsContext* g_ctx);
 static void apply_masking(GraphicsContext* g_ctx, uint8_t mask_reg);
@@ -23,7 +23,6 @@ void get_graphics_context(GraphicsContext* ctx){
     TTF_Init();
 #ifdef __ANDROID__
     ctx->font = TTF_OpenFont("asap.ttf", (int)(ctx->screen_height * 0.05));
-    // CORREÇÃO AQUI: Usa SDL_GetError() em vez de TTF_GetError()
     if(ctx->font == NULL) LOG(WARN, "Font not found: %s", SDL_GetError());
     
     SDL_SetHint(SDL_HINT_ANDROID_ALLOW_RECREATE_ACTIVITY, "1");
@@ -33,7 +32,6 @@ void get_graphics_context(GraphicsContext* ctx){
 #else
     SDL_IOStream* rw = SDL_IOFromMem(font_data, sizeof(font_data));
     ctx->font = TTF_OpenFontIO(rw, 1, 20);
-    // CORREÇÃO AQUI: Usa SDL_GetError() em vez de TTF_GetError()
     if(ctx->font == NULL) LOG(WARN, "Font not loaded from memory: %s", SDL_GetError());
     ctx->window = SDL_CreateWindow("NES Emulator", ctx->width * (int)ctx->scale, ctx->height * (int)ctx->scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
 #endif
@@ -64,8 +62,6 @@ void get_graphics_context(GraphicsContext* ctx){
     SDL_RenderClear(ctx->renderer);
     SDL_RenderPresent(ctx->renderer);
 }
-
-// ... o resto do arquivo gfx.c permanece igual ...
 
 void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint8_t mask_reg){
     SDL_RenderClear(g_ctx->renderer);
@@ -125,7 +121,7 @@ static void render_scanlines(GraphicsContext* g_ctx) {
 #else
     int w, h;
     SDL_GetRenderOutputSize(g_ctx->renderer, &w, &h);
-    start_x = 0; width = w; start_y = 0; end_y = h;
+    start_x = 0; width = (float)w; start_y = 0; end_y = (float)h;
 #endif
 
     int step = (end_y - start_y > 1000) ? 3 : 2;
@@ -152,41 +148,130 @@ static void render_fps_text(GraphicsContext* ctx, float fps) {
     }
 }
 
+// ----------------------------------------------------------------------
+// TAS OSD & Input Display Implementation
+// ----------------------------------------------------------------------
+
+static void draw_input_indicator(SDL_Renderer* r, float x, float y, float w, float h, const char* label, int active, SDL_Color on_color, TTF_Font* font) {
+    SDL_FRect rect = {x, y, w, h};
+    
+    // Background
+    if (active) {
+        SDL_SetRenderDrawColor(r, on_color.r, on_color.g, on_color.b, 200);
+        SDL_RenderFillRect(r, &rect);
+    } else {
+        SDL_SetRenderDrawColor(r, 20, 20, 20, 150);
+        SDL_RenderFillRect(r, &rect);
+    }
+    
+    // Border
+    SDL_SetRenderDrawColor(r, 180, 180, 180, 200);
+    SDL_RenderRect(r, &rect);
+
+    // Label
+    if (font && label) {
+        SDL_Color txt_col = {255, 255, 255, 255};
+        SDL_Surface* surf = TTF_RenderText_Solid(font, label, 0, txt_col);
+        if(surf){
+            SDL_Texture* tx = SDL_CreateTextureFromSurface(r, surf);
+            float tw = (float)surf->w;
+            float th = (float)surf->h;
+            // Center text
+            SDL_FRect tdest = {x + (w - tw)/2, y + (h - th)/2, tw, th};
+            SDL_RenderTexture(r, tx, NULL, &tdest);
+            SDL_DestroyTexture(tx);
+            SDL_DestroySurface(surf);
+        }
+    }
+}
+
 static void render_tas_osd(GraphicsContext* g_ctx, Emulator* emu) {
-    if (emu->movie.mode == MOVIE_MODE_INACTIVE) return;
+    if (emu->movie.mode == MOVIE_MODE_INACTIVE && !emu->show_script_selector) return;
     if (!g_ctx->font) return;
 
-    char osd_text[128];
-    SDL_Color color = {255, 255, 255, 255};
+    SDL_Renderer* r = g_ctx->renderer;
+    
+    // 1. Status Text
+    char osd_text[64];
+    SDL_Color status_color = {255, 255, 255, 255};
+    const char* mode_str = "";
 
     switch(emu->movie.mode) {
-        case MOVIE_MODE_RECORDING:
-            snprintf(osd_text, 128, "REC %u", emu->current_frame_index);
-            color = (SDL_Color){255, 80, 80, 255};
+        case MOVIE_MODE_RECORDING: 
+            mode_str = "REC"; 
+            status_color = (SDL_Color){255, 50, 50, 255}; 
             break;
-        case MOVIE_MODE_PLAYBACK:
-            snprintf(osd_text, 128, "PLAY %u / %u", emu->current_frame_index, emu->movie.frame_count);
-            color = (SDL_Color){80, 255, 80, 255};
+        case MOVIE_MODE_PLAYBACK:  
+            mode_str = "PLAY"; 
+            status_color = (SDL_Color){50, 255, 50, 255}; 
+            if (emu->movie.read_only) {
+               mode_str = "PLAY [R/O]";
+            }
             break;
-        case MOVIE_MODE_FINISHED:
-            snprintf(osd_text, 128, "FIN %u", emu->current_frame_index);
+        case MOVIE_MODE_FINISHED:  
+            mode_str = "FIN";  
+            status_color = (SDL_Color){150, 150, 150, 255}; 
             break;
-        default: return;
+        default: break;
     }
 
-    SDL_Surface* surf = TTF_RenderText_Solid(g_ctx->font, osd_text, 0, color);
+    snprintf(osd_text, 64, "%s [%u / %u]", mode_str, emu->current_frame_index, emu->movie.frame_count);
+    
+    SDL_Surface* surf = TTF_RenderText_Solid(g_ctx->font, osd_text, 0, status_color);
     if (surf) {
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(g_ctx->renderer, surf);
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
         SDL_FRect dst = {
-            (float)g_ctx->screen_width - surf->w - 10,
-            10.0f,
-            (float)surf->w,
+            (float)g_ctx->screen_width - surf->w - 20, 
+            60.0f, // Um pouco abaixo do FPS
+            (float)surf->w, 
             (float)surf->h
         };
-        SDL_RenderTexture(g_ctx->renderer, tex, NULL, &dst);
+        SDL_RenderTexture(r, tex, NULL, &dst);
         SDL_DestroyTexture(tex);
         SDL_DestroySurface(surf);
     }
+
+    // 2. Input Visualizer
+    // Vamos desenhar os inputs do Player 1
+    uint16_t joy = emu->mem.joy1.status;
+    
+    // Configurações de layout
+#ifdef __ANDROID__
+    float btn_size = g_ctx->screen_height * 0.05f;
+#else
+    float btn_size = 20.0f;
+#endif
+    float gap = 4.0f;
+    float start_x = 20.0f;
+    float start_y = 100.0f; 
+
+    // Cores
+    SDL_Color c_dpad = {200, 200, 200, 255};
+    SDL_Color c_sel  = {100, 100, 255, 255};
+    SDL_Color c_btn  = {255, 50, 50, 255};
+
+    // D-Pad Grid (3x3 logic)
+    // Up
+    draw_input_indicator(r, start_x + btn_size + gap, start_y, btn_size, btn_size, "^", joy & UP, c_dpad, NULL);
+    // Left
+    draw_input_indicator(r, start_x, start_y + btn_size + gap, btn_size, btn_size, "<", joy & LEFT, c_dpad, NULL);
+    // Down
+    draw_input_indicator(r, start_x + btn_size + gap, start_y + (btn_size + gap)*2, btn_size, btn_size, "v", joy & DOWN, c_dpad, NULL);
+    // Right
+    draw_input_indicator(r, start_x + (btn_size + gap)*2, start_y + btn_size + gap, btn_size, btn_size, ">", joy & RIGHT, c_dpad, NULL);
+
+    float mid_x = start_x + (btn_size + gap)*3 + 10;
+    float mid_y = start_y + btn_size + gap;
+    
+    // Select / Start
+    draw_input_indicator(r, mid_x, mid_y, btn_size * 2, btn_size * 0.7f, "SEL", joy & SELECT, c_sel, g_ctx->font);
+    draw_input_indicator(r, mid_x + btn_size*2 + gap, mid_y, btn_size * 2, btn_size * 0.7f, "STA", joy & START, c_sel, g_ctx->font);
+
+    float action_x = mid_x + (btn_size*2 + gap)*2 + 10;
+    
+    // B / A
+    draw_input_indicator(r, action_x, mid_y, btn_size, btn_size, "B", joy & BUTTON_B, c_btn, g_ctx->font);
+    draw_input_indicator(r, action_x + btn_size + gap, mid_y, btn_size, btn_size, "A", joy & BUTTON_A, c_btn, g_ctx->font);
 }
 
 void free_graphics(GraphicsContext* ctx){
