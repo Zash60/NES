@@ -185,7 +185,6 @@ void render_touch_controls(GraphicsContext* ctx){
             continue;
         }
 
-        // --- Cores de Estado (Accessando via struct movie corretamente) ---
         if (button->id == BTN_ID_TAS_REC) {
             if (touch_pad.emulator->movie.mode == MOVIE_MODE_RECORDING) SDL_SetTextureColorMod(button->texture, 255, 0, 0); 
             else SDL_SetTextureColorMod(button->texture, 255, 255, 255);
@@ -215,7 +214,40 @@ void render_touch_controls(GraphicsContext* ctx){
 void touchpad_mapper(struct JoyPad* joyPad, SDL_Event* event){
     if(!touch_pad.g_ctx || joyPad->player != 0) return;
     
-    uint16_t key = joyPad->status;
+    // IMPORTANTE: Se estiver em playback (não takeover), o input vem do filme, não do touch.
+    // Mas permitimos controles de sistema (Menu, Save, TAS)
+    if (touch_pad.emulator->movie.mode == MOVIE_MODE_PLAYBACK) {
+         if (event->type == SDL_EVENT_FINGER_DOWN) {
+            double x = event->tfinger.x, y = event->tfinger.y;
+            to_abs_position(&x, &y);
+            // Verifica apenas botões de sistema/TAS
+            for (int i = 0; i < TOUCH_BUTTON_COUNT; i++) {
+                TouchButton *btn = touch_pad.buttons[i];
+                if (!btn) continue;
+                if (btn->id >= BTN_ID_SAVE) { // Botões especiais
+                     if (is_within_bound((int)x, (int)y, &btn->dest) || (i < 4 && is_within_circle((int)x, (int)y, btn->x, btn->y, btn->r))) {
+                         // Lógica de clique para botões de sistema replicada aqui simplificada
+                         // (idealmente refatorar para função comum)
+                        uint32_t current_time = SDL_GetTicks();
+                         if (btn->id == BTN_ID_MENU) touch_pad.emulator->pause = !touch_pad.emulator->pause;
+                         else if (btn->id == BTN_ID_TAS_TOGGLE) touch_pad.show_tas_toolbar = !touch_pad.show_tas_toolbar;
+                         else if (btn->id == BTN_ID_TAS_PLAY) tas_start_playback(touch_pad.emulator, 0); // Stop/Restart logic handled inside
+                         else if (btn->id == BTN_ID_TAS_STEP) tas_step_frame(touch_pad.emulator);
+                         else if (btn->id == BTN_ID_TAS_REC) tas_start_recording(touch_pad.emulator); // Stop Playback -> Start Rec
+                     }
+                }
+            }
+         }
+         return; // Retorna sem modificar joyPad->status
+    }
+
+    uint16_t key = joyPad->status; // Pega o estado atual (que pode ter vindo de teclado/gamepad)
+    
+    // Se veio do reset/load state e está zerado, começamos do zero para evitar lixo
+    if (touch_pad.emulator->movie.mode == MOVIE_MODE_RECORDING && touch_pad.emulator->current_frame_index == 0) {
+        // key = 0; // Opcional, mas perigoso se usar gamepad junto
+    }
+
     double x = event->tfinger.x, y = event->tfinger.y;
     uint32_t current_time = SDL_GetTicks();
     
