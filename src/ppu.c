@@ -270,11 +270,14 @@ void execute_ppu(PPU* ppu){
         // render scanlines 0 - 239
         if(ppu->dots > 0 && ppu->dots <= VISIBLE_DOTS){
             int x = (int)ppu->dots - 1;
-            uint8_t fine_x = ((uint16_t)ppu->x + x) % 8, palette_addr = 0, palette_addr_sp = 0, back_priority = 0;
+            // Removed redundant fine_x calc for check here, handled in render_background
+            uint8_t palette_addr = 0, palette_addr_sp = 0, back_priority = 0;
 
             if(ppu->mask & SHOW_BG){
                 palette_addr = render_background(ppu);
-                if(fine_x == 7) {
+                
+                // Horizontal scrolling logic at specific dot intervals
+                if((x & 0x7) == 7) { // Replaces fine_x == 7
                     if ((ppu->v & COARSE_X) == 31) {
                         ppu->v &= ~COARSE_X;
                         // switch horizontal nametable
@@ -291,7 +294,7 @@ void execute_ppu(PPU* ppu){
                 palette_addr = palette_addr_sp;
 
             palette_addr = ppu->palette[palette_addr];
-            ppu->screen[ppu->scanlines * VISIBLE_DOTS + ppu->dots - 1] = nes_palette[palette_addr];
+            ppu->screen[ppu->scanlines * VISIBLE_DOTS + x] = nes_palette[palette_addr];
         }
         if(ppu->dots == VISIBLE_DOTS + 1 && ppu->mask & SHOW_BG){
             if((ppu->v & FINE_Y) != FINE_Y) {
@@ -390,25 +393,65 @@ void execute_ppu(PPU* ppu){
 
 
 static uint16_t render_background(PPU* ppu){
-    int x = (int)ppu->dots - 1;
-    uint8_t fine_x = ((uint16_t)ppu->x + x) % 8;
-
-    if(!(ppu->mask & SHOW_BG_8) && x < 8)
+    // Otimização: Acesso rápido a variáveis
+    // dots-1 é a coordenada X do pixel atual.
+    
+    // Se BG está desativado nos primeiros 8 pixels (clipping à esquerda)
+    if(!(ppu->mask & SHOW_BG_8) && ppu->dots <= 8)
         return 0;
 
-    uint16_t tile_addr = 0x2000 | (ppu->v & 0xFFF);
+    // Cálculo otimizado de endereços usando bitwise em vez de lógica complexa
+    
+    // Fine Y (3 bits inferiores de v)
+    uint16_t fine_y = (ppu->v >> 12) & 0x7;
+    
+    // Endereço na Nametable (base 0x2000 + 12 bits baixos de v)
+    uint16_t nametable_addr = 0x2000 | (ppu->v & 0x0FFF);
+    
+    // 1. Ler o índice do Tile (Pattern ID)
+    uint8_t tile_index = read_vram(ppu, nametable_addr);
+
+    // 2. Calcular endereço na Pattern Table
+    // (BG_TABLE é 0x1000 se bit 4 de ctrl estiver setado, senão 0)
+    // Endereço = Base + (TileIndex * 16) + FineY
+    uint16_t pattern_addr = ((ppu->ctrl & BG_TABLE) << 8) | ((uint16_t)tile_index << 4) | fine_y;
+
+    // 3. Ler os dois bitplanes (Low e High bytes)
+    uint8_t low_plane = read_vram(ppu, pattern_addr);
+    uint8_t high_plane = read_vram(ppu, pattern_addr + 8);
+
+    // 4. Calcular Fine X (offset horizontal dentro do tile)
+    // (ppu->x é o fine scroll x)
+    // Otimização: Usar & 7 em vez de % 8
+    uint8_t fine_x = (ppu->x + ((int)ppu->dots - 1)) & 0x7;
+    
+    // O pixel vem do bit (7 - fine_x)
+    uint8_t shift = 7 ^ fine_x;
+
+    // Combinar os bits dos planos para formar a cor (0-3)
+    uint8_t pixel_val = ((low_plane >> shift) & 1) | (((high_plane >> shift) & 1) << 1);
+
+    // Se o pixel for 0 (transparente), retornamos 0 imediatamente (cor de fundo)
+    if(!pixel_val) return 0;
+
+    // 5. Calcular Atributos (Paleta de cores)
+    // Endereço da tabela de atributos: 0x23C0 + (v & 0x0C00) + byte offset
+    // Byte offset = (CoarseY / 4) * 8 + (CoarseX / 4)
+    // A fórmula abaixo é a forma bitwise padrão do NES
     uint16_t attr_addr = 0x23C0 | (ppu->v & 0x0C00) | ((ppu->v >> 4) & 0x38) | ((ppu->v >> 2) & 0x07);
-
-    uint16_t pattern_addr = (read_vram(ppu, tile_addr) * 16 + ((ppu->v >> 12) & 0x7)) | ((ppu->ctrl & BG_TABLE) << 8);
-
-    uint16_t palette_addr = (read_vram(ppu, pattern_addr) >> (7 ^ fine_x)) & 1;
-    palette_addr |= ((read_vram(ppu, pattern_addr + 8) >> (7 ^ fine_x)) & 1) << 1;
-
-    if(!palette_addr)
-        return 0;
-
+    
     uint8_t attr = read_vram(ppu, attr_addr);
-    return palette_addr | (((attr >> ((ppu->v >> 4) & 4 | ppu->v & 2)) & 0x3) << 2);
+
+    // Determinar qual quadrante (2 bits) do byte de atributo usar
+    // O bit 1 de Coarse X e Coarse Y determinam o quadrante
+    // Quadrante = (CoarseY & 2) * 2 | (CoarseX & 2)
+    // Simplificado:
+    uint8_t attr_shift = ((ppu->v >> 4) & 4) | (ppu->v & 2);
+    
+    // Retorna o índice final da paleta:
+    // (bits de atributo deslocados) & 3 -> High 2 bits
+    // pixel_val -> Low 2 bits
+    return pixel_val | (((attr >> attr_shift) & 0x3) << 2);
 }
 
 static uint16_t render_sprites(PPU* restrict ppu, uint16_t bg_addr, uint8_t* restrict back_priority){
