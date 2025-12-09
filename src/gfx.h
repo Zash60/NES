@@ -15,6 +15,7 @@ typedef struct GraphicsContext{
     SDL_Window* window;
     SDL_Renderer* renderer;
     SDL_Texture* texture;
+    SDL_Texture* scanline_texture; // <--- NOVO CAMPO
     SDL_AudioStream* audio_stream;
     TTF_Font* font;
     SDL_FRect dest;
@@ -28,12 +29,6 @@ typedef struct GraphicsContext{
 
 void free_graphics(GraphicsContext* ctx);
 void get_graphics_context(GraphicsContext* ctx);
-
-// Renderiza o buffer do jogo para a textura
 void render_graphics_update(GraphicsContext* g_ctx, const uint32_t* buffer, uint8_t mask_reg);
-
-// Desenha UI e finaliza o frame
 void render_ui_and_present(GraphicsContext* g_ctx, float fps, struct Emulator* emu);
-
-// Desenha apenas o frame atual (para pause)
 void render_frame_only(GraphicsContext* g_ctx);
