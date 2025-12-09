@@ -3,6 +3,9 @@
 #include "emulator.h"
 #include "utils.h"
 
+// Máscara para espelhamento da RAM (0x800 - 1)
+#define RAM_MASK 0x7FF 
+
 void init_mem(Emulator* emulator){
     Memory* mem = &emulator->mem;
     mem->emulator = emulator;
@@ -15,7 +18,7 @@ void init_mem(Emulator* emulator){
 
 uint8_t* get_ptr(Memory* mem, uint16_t address){
     if(address < 0x2000)
-        return mem->RAM + (address % 0x800);
+        return mem->RAM + (address & RAM_MASK); // OTIMIZADO
     if(address > 0x6000 && address < 0x8000 && mem->mapper->PRG_RAM != NULL)
         return mem->mapper->PRG_RAM + (address - 0x6000);
     return NULL;
@@ -26,13 +29,13 @@ void write_mem(Memory* mem, uint16_t address, uint8_t value){
     mem->bus = value;
 
     if(address < RAM_END) {
-        mem->RAM[address % RAM_SIZE] = value;
+        mem->RAM[address & RAM_MASK] = value; // OTIMIZADO
         return;
     }
 
     // resolve mirrored registers
     if(address < IO_REG_MIRRORED_END)
-        address = 0x2000 + (address - 0x2000) % 0x8;
+        address = 0x2000 + (address - 0x2000) % 0x8; // Aqui o módulo é por 8, o compilador otimiza para & 7, pode deixar
 
     // handle all IO registers
     if(address < IO_REG_END){
@@ -147,9 +150,10 @@ void write_mem(Memory* mem, uint16_t address, uint8_t value){
 
     mem->mapper->write_ROM(mem->mapper, address, value);
 }
+
 uint8_t read_mem(Memory* mem, uint16_t address){
     if(address < RAM_END) {
-        mem->bus = mem->RAM[address % RAM_SIZE];
+        mem->bus = mem->RAM[address & RAM_MASK]; // OTIMIZADO
         return mem->bus;
     }
     
