@@ -419,13 +419,12 @@ void load_state(Emulator* emulator, const char* unused) {
     }
 
     // TAS Movie Sync Logic
+    FrameInput* savestate_movie_frames = NULL;
     if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
-        if (emulator->movie.guid != sv_header.movie_guid) { 
-            LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid); 
-            fclose(f); return; 
+        if (emulator->movie.guid != sv_header.movie_guid) {
+            LOG(ERROR, "Savestate movie GUID mismatch! Current: %llu, Savestate: %llu", emulator->movie.guid, sv_header.movie_guid);
+            fclose(f); return;
         }
-
-        FrameInput* savestate_movie_frames = NULL;
         if (sv_header.movie_length > 0) {
             savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
             if (!savestate_movie_frames) {
@@ -576,8 +575,12 @@ void load_state(Emulator* emulator, const char* unused) {
 
     Mapper* m = &emulator->mapper;
 
+    // Calculate ROM sizes based on banks (16KB per PRG bank, 8KB per CHR bank)
+    size_t prg_rom_size = m->PRG_banks * 0x4000; // 16KB per bank
+    size_t chr_rom_size = m->CHR_banks * 0x2000; // 8KB per bank
+
     // Validate and restore PRG pointer safely
-    if (m->PRG_ROM && map_snap.prg_ptr_offset < m->PRG_size) {
+    if (m->PRG_ROM && map_snap.prg_ptr_offset < prg_rom_size) {
         m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
     } else if (m->PRG_ROM) {
         LOG(WARN, "Invalid PRG pointer offset: %llu, resetting to start", (unsigned long long)map_snap.prg_ptr_offset);
@@ -585,7 +588,7 @@ void load_state(Emulator* emulator, const char* unused) {
     }
 
     // Validate and restore CHR pointer safely
-    if (m->CHR_ROM && map_snap.chr_ptr_offset < m->CHR_size) {
+    if (m->CHR_ROM && map_snap.chr_ptr_offset < chr_rom_size) {
         m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
     } else if (m->CHR_ROM) {
         LOG(WARN, "Invalid CHR pointer offset: %llu, resetting to start", (unsigned long long)map_snap.chr_ptr_offset);
