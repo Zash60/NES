@@ -292,7 +292,10 @@ void save_state(Emulator* emulator, const char* unused) {
     char full_path[1024];
     get_slot_filename(emulator, full_path, sizeof(full_path));
     FILE* f = fopen(full_path, "wb");
-    if (!f) return;
+    if (!f) {
+        LOG(ERROR, "Failed to create save file: %s", full_path);
+        return;
+    }
 
     SaveHeader_v5 header = { 
         .magic = SAVE_MAGIC, 
@@ -330,22 +333,46 @@ void save_state(Emulator* emulator, const char* unused) {
     
     fwrite(&emulator->apu, sizeof(APU), 1, f);
     
-    Mapper* m = &emulator->mapper; 
-    MapperSnapshot map_snap = {0}; 
-    map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0; 
-    map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0; 
-    map_snap.mirroring = m->mirroring; 
-    map_snap.ram_size = m->RAM_size; 
-    if (m->extension) { 
-        map_snap.has_extension = 1; 
-        memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data)); 
+    Mapper* m = &emulator->mapper;
+    MapperSnapshot map_snap = {0};
+    map_snap.prg_ptr_offset = (m->PRG_ptr && m->PRG_ROM) ? (m->PRG_ptr - m->PRG_ROM) : 0;
+    map_snap.chr_ptr_offset = (m->CHR_ptr && m->CHR_ROM) ? (m->CHR_ptr - m->CHR_ROM) : 0;
+    map_snap.mirroring = m->mirroring;
+    map_snap.ram_size = m->RAM_size;
+    if (m->extension) {
+        map_snap.has_extension = 1;
+        memcpy(map_snap.extension_data, m->extension, sizeof(map_snap.extension_data));
     }
-    fwrite(&map_snap, sizeof(MapperSnapshot), 1, f);
-    if (m->PRG_RAM && m->RAM_size > 0) fwrite(m->PRG_RAM, 1, m->RAM_size, f);
+
+    if (fwrite(&map_snap, sizeof(MapperSnapshot), 1, f) != 1) {
+        LOG(ERROR, "Failed to write mapper snapshot");
+        fclose(f);
+        return;
+    }
+
+    if (m->PRG_RAM && m->RAM_size > 0) {
+        if (fwrite(m->PRG_RAM, 1, m->RAM_size, f) != m->RAM_size) {
+            LOG(ERROR, "Failed to write PRG RAM");
+            fclose(f);
+            return;
+        }
+    }
     
     // Gravar Movie Data no final
-    if (emulator->movie.mode != MOVIE_MODE_INACTIVE) {
-        fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
+    if (emulator->movie.mode != MOVIE_MODE_INACTIVE && emulator->movie.frame_count > 0) {
+        size_t written_frames = fwrite(emulator->movie.frames, sizeof(FrameInput), emulator->movie.frame_count, f);
+        if (written_frames != emulator->movie.frame_count) {
+            LOG(ERROR, "Failed to write movie frames: expected %u, wrote %zu", emulator->movie.frame_count, written_frames);
+            fclose(f);
+            return;
+        }
+    }
+
+    // Ensure all data is written to disk
+    if (fflush(f) != 0) {
+        LOG(ERROR, "Failed to flush save file to disk");
+        fclose(f);
+        return;
     }
 
     fclose(f);
@@ -360,13 +387,35 @@ void load_state(Emulator* emulator, const char* unused) {
     char full_path[1024];
     get_slot_filename(emulator, full_path, sizeof(full_path));
     FILE* f = fopen(full_path, "rb");
-    if (!f) return;
+    if (!f) {
+        LOG(ERROR, "Failed to open save file: %s", full_path);
+        return;
+    }
+
+    // Get file size for validation
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size < sizeof(SaveHeader_v5)) {
+        LOG(ERROR, "Save file too small: %ld bytes", file_size);
+        fclose(f);
+        return;
+    }
 
     SaveHeader_v5 sv_header;
     // Aceita versões 5 (antiga) e 6 (nova)
-    if (fread(&sv_header, sizeof(SaveHeader_v5), 1, f) != 1 || sv_header.magic != SAVE_MAGIC || sv_header.version < 5) { 
-        LOG(ERROR, "Incompatible save state!");
-        fclose(f); return; 
+    if (fread(&sv_header, sizeof(SaveHeader_v5), 1, f) != 1 || sv_header.magic != SAVE_MAGIC || sv_header.version < 5) {
+        LOG(ERROR, "Incompatible save state! Magic: 0x%08X, Version: %d", sv_header.magic, sv_header.version);
+        fclose(f);
+        return;
+    }
+
+    // Validate movie frame count to prevent buffer overflows
+    if (sv_header.movie_length > MAX_MOVIE_FRAMES) {
+        LOG(ERROR, "Invalid movie length: %u (max: %d)", sv_header.movie_length, MAX_MOVIE_FRAMES);
+        fclose(f);
+        return;
     }
 
     // TAS Movie Sync Logic
@@ -376,19 +425,39 @@ void load_state(Emulator* emulator, const char* unused) {
             fclose(f); return; 
         }
 
-        FrameInput* savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
-        if (sv_header.movie_guid != 0) {
+        FrameInput* savestate_movie_frames = NULL;
+        if (sv_header.movie_length > 0) {
+            savestate_movie_frames = calloc(sv_header.movie_length, sizeof(FrameInput));
+            if (!savestate_movie_frames) {
+                LOG(ERROR, "Failed to allocate memory for movie frames: %u", sv_header.movie_length);
+                fclose(f);
+                return;
+            }
+        }
+
+        if (sv_header.movie_guid != 0 && sv_header.movie_length > 0) {
             // Sincronizar o índice do frame ANTES de qualquer lógica de truncagem/cópia
             emulator->current_frame_index = sv_header.savestate_frame_count;
             long pos = ftell(f);
             fseek(f, 0, SEEK_END);
             long end = ftell(f);
             long frames_size = sv_header.movie_length * sizeof(FrameInput);
-            
-            // Check if file is big enough
-            if (end >= frames_size) {
+
+            // Check if file is big enough and frames fit
+            if (end >= frames_size && pos + frames_size <= end) {
                  fseek(f, end - frames_size, SEEK_SET);
-                 fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
+                 size_t read_frames = fread(savestate_movie_frames, sizeof(FrameInput), sv_header.movie_length, f);
+                 if (read_frames != sv_header.movie_length) {
+                     LOG(ERROR, "Failed to read movie frames: expected %u, got %zu", sv_header.movie_length, read_frames);
+                     free(savestate_movie_frames);
+                     fclose(f);
+                     return;
+                 }
+            } else {
+                LOG(ERROR, "Invalid movie data in save file");
+                free(savestate_movie_frames);
+                fclose(f);
+                return;
             }
             // Restore pos for main load
             fseek(f, pos, SEEK_SET);
@@ -414,20 +483,47 @@ void load_state(Emulator* emulator, const char* unused) {
         free(savestate_movie_frames);
     } else if (sv_header.movie_guid != 0) {
         // Load movie if inactive but save has one
+        if (sv_header.movie_length > MAX_MOVIE_FRAMES) {
+            LOG(ERROR, "Movie too long: %u frames (max: %d)", sv_header.movie_length, MAX_MOVIE_FRAMES);
+            free(savestate_movie_frames);
+            fclose(f);
+            return;
+        }
+
         emulator->movie.guid = sv_header.movie_guid;
         emulator->movie.frame_count = sv_header.movie_length;
-        
+
         long pos = ftell(f);
         fseek(f, 0, SEEK_END);
         long end = ftell(f);
         long frames_size = sv_header.movie_length * sizeof(FrameInput);
-        fseek(f, end - frames_size, SEEK_SET);
-        fread(emulator->movie.frames, sizeof(FrameInput), sv_header.movie_length, f);
+
+        if (end >= frames_size && pos + frames_size <= end) {
+            fseek(f, end - frames_size, SEEK_SET);
+            size_t read_frames = fread(emulator->movie.frames, sizeof(FrameInput), sv_header.movie_length, f);
+            if (read_frames != sv_header.movie_length) {
+                LOG(ERROR, "Failed to read movie data from save file");
+                free(savestate_movie_frames);
+                fclose(f);
+                return;
+            }
+        } else {
+            LOG(ERROR, "Invalid movie data size in save file");
+            free(savestate_movie_frames);
+            fclose(f);
+            return;
+        }
+
         fseek(f, pos, SEEK_SET);
 
         emulator->movie.mode = MOVIE_MODE_PLAYBACK;
         emulator->movie.read_only = 1;
         emulator->current_frame_index = sv_header.savestate_frame_count; // Sincronizar índice do frame
+    }
+
+    // Clean up temporary movie frames buffer
+    if (savestate_movie_frames) {
+        free(savestate_movie_frames);
     }
 
     SDL_PauseAudioDevice(SDL_GetAudioStreamDevice(emulator->g_ctx.audio_stream));
@@ -471,13 +567,45 @@ void load_state(Emulator* emulator, const char* unused) {
     // Não resetar audio_start e sampler.index cegamente, isso causa estalos e drift
     // emulator->apu.audio_start = 0; emulator->apu.sampler.index = 0; 
     
-    MapperSnapshot map_snap; fread(&map_snap, sizeof(MapperSnapshot), 1, f);
+    MapperSnapshot map_snap;
+    if (fread(&map_snap, sizeof(MapperSnapshot), 1, f) != 1) {
+        LOG(ERROR, "Failed to read mapper snapshot");
+        fclose(f);
+        return;
+    }
+
     Mapper* m = &emulator->mapper;
-    if (m->PRG_ROM) m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
-    if (m->CHR_ROM) m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
+
+    // Validate and restore PRG pointer safely
+    if (m->PRG_ROM && map_snap.prg_ptr_offset < m->PRG_size) {
+        m->PRG_ptr = m->PRG_ROM + map_snap.prg_ptr_offset;
+    } else if (m->PRG_ROM) {
+        LOG(WARN, "Invalid PRG pointer offset: %llu, resetting to start", (unsigned long long)map_snap.prg_ptr_offset);
+        m->PRG_ptr = m->PRG_ROM;
+    }
+
+    // Validate and restore CHR pointer safely
+    if (m->CHR_ROM && map_snap.chr_ptr_offset < m->CHR_size) {
+        m->CHR_ptr = m->CHR_ROM + map_snap.chr_ptr_offset;
+    } else if (m->CHR_ROM) {
+        LOG(WARN, "Invalid CHR pointer offset: %llu, resetting to start", (unsigned long long)map_snap.chr_ptr_offset);
+        m->CHR_ptr = m->CHR_ROM;
+    }
+
     set_mirroring(m, map_snap.mirroring);
-    if (map_snap.has_extension && m->extension) memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
-    if (m->PRG_RAM && m->RAM_size > 0) fread(m->PRG_RAM, 1, m->RAM_size, f);
+
+    if (map_snap.has_extension && m->extension) {
+        memcpy(m->extension, map_snap.extension_data, sizeof(map_snap.extension_data));
+    }
+
+    // Safely load PRG RAM if it exists
+    if (m->PRG_RAM && m->RAM_size > 0 && map_snap.ram_size > 0) {
+        size_t ram_to_read = (map_snap.ram_size < m->RAM_size) ? map_snap.ram_size : m->RAM_size;
+        if (fread(m->PRG_RAM, 1, ram_to_read, f) != ram_to_read) {
+            LOG(WARN, "Failed to read complete PRG RAM, zeroing remaining");
+            memset(m->PRG_RAM + ram_to_read, 0, m->RAM_size - ram_to_read);
+        }
+    }
 
     // O índice do frame é sincronizado na lógica TAS acima, ou será restaurado aqui se não houver movie.
     if (emulator->movie.mode == MOVIE_MODE_INACTIVE) {
@@ -625,16 +753,19 @@ void run_emulator(struct Emulator* emulator){
 
     while (!emulator->exit) {
         mark_start(tm);
-        while (SDL_PollEvent(&e)) {
+
+        // Limit event processing to prevent event queue starvation (max 16 events per frame)
+        int event_count = 0;
+        while (SDL_PollEvent(&e) && event_count++ < 16) {
             if(emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_script_selector_input(emulator, (int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height));
-                continue; 
+                continue;
             }
             if(emulator->pause && !emulator->show_script_selector && e.type == SDL_EVENT_FINGER_DOWN) {
                 handle_menu_touch((int)(e.tfinger.x * g->screen_width), (int)(e.tfinger.y * g->screen_height), emulator);
             }
             if (emulator->movie.mode != MOVIE_MODE_PLAYBACK) {
-                update_joypad(j1, &e); 
+                update_joypad(j1, &e);
                 update_joypad(j2, &e);
             }
             if(e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) emulator->exit = 1;
@@ -721,13 +852,31 @@ void run_emulator(struct Emulator* emulator){
                 emulator->pause = 1;
             }
 
-            mark_end(tm); 
-            adjusted_wait(tm);
-            if (emulator->slow_motion_factor > 1.0f) {
+            mark_end(tm);
+            int wait_result = adjusted_wait(tm);
+
+            // Only apply slow motion if frame was completed quickly enough
+            if (emulator->slow_motion_factor > 1.0f && wait_result > 0) {
                 double frame_ms = 1000.0 / (emulator->type==PAL?PAL_FRAME_RATE:NTSC_FRAME_RATE);
                 double extra_wait = frame_ms * (emulator->slow_motion_factor - 1.0);
-                SDL_Delay((uint32_t)extra_wait);
+
+                // Cap extra wait to prevent excessive delays
+                if (extra_wait > 100.0) extra_wait = 100.0;
+
+                // Use more precise delay for slow motion
+                uint32_t delay_ms = (uint32_t)extra_wait;
+                if (delay_ms > 0) {
+                    SDL_Delay(delay_ms);
+                }
             }
+
+            // Prevent CPU hogging when emulator runs too fast
+            static uint32_t last_frame_time = 0;
+            uint32_t current_time = SDL_GetTicks();
+            if (current_time - last_frame_time < 1) { // Less than 1ms per frame
+                SDL_Delay(1); // Yield CPU to prevent excessive spinning
+            }
+            last_frame_time = current_time;
 
         } else {
             render_frame_only(g);
