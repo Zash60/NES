@@ -1,22 +1,109 @@
 name: Build Android APK
 
 on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/main.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/main.yml'
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true
 
 jobs:
-  build:
+  validate:
+    name: Validate Code
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up JDK
+      - name: Validate CMakeLists.txt
+        run: |
+          if [ ! -f "CMakeLists.txt" ]; then
+            echo "CMakeLists.txt not found!"
+            exit 1
+          fi
+          echo "CMakeLists.txt validation passed"
+
+      - name: Check Android project structure
+        run: |
+          if [ ! -d "android" ]; then
+            echo "Android directory not found!"
+            exit 1
+          fi
+          if [ ! -f "android/build.gradle" ]; then
+            echo "Android build.gradle not found!"
+            exit 1
+          fi
+          echo "Android project structure validation passed"
+
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        build_type: [debug]
+        include:
+          - build_type: debug
+            task: assembleDebug
+            apk_pattern: 'android/app/build/outputs/apk/debug/*.apk'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: gradle
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            android/.gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Cache NDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.android-ndk
+          key: ndk-r25c-${{ runner.os }}
+          restore-keys: |
+            ndk-r25c-
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -28,6 +115,17 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
+          add-to-path: false
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/.cxx
+            android/app/build/intermediates/cmake
+          key: cmake-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', 'src/**') }}
+          restore-keys: |
+            cmake-${{ runner.os }}-
 
       - name: Grant execute permission for gradlew
         working-directory: ./android
@@ -35,11 +133,42 @@ jobs:
 
       - name: Build with Gradle
         working-directory: ./android
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          echo "Building ${{ matrix.build_type }} APK..."
+          ./gradlew ${{ matrix.task }} --stacktrace --info --parallel
+
+      - name: Check build artifacts
+        run: |
+          echo "Checking for APK files..."
+          find android -name "*.apk" -type f
+          APK_COUNT=$(find android -name "*.apk" -type f | wc -l)
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "No APK files found after build!"
+            exit 1
+          fi
+          echo "Found $APK_COUNT APK file(s)"
 
       - name: Upload APK Artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: nes-emulator-apk
-          path: android/**/*.apk
+          name: nes-emulator-${{ matrix.build_type }}-apk
+          path: ${{ matrix.apk_pattern }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate build summary
+        if: success()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Type**: ${{ matrix.build_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **APK Files**: $(find android -name "*.apk" -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Time**: $(date)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate failure summary
+        if: failure()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Type**: ${{ matrix.build_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failure Time**: $(date)" >> $GITHUB_STEP_SUMMARY
