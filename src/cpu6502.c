@@ -885,17 +885,7 @@ static uint16_t get_address(c6502* ctx){
     return 0;
 }
 
-static void set_ZN(c6502* ctx, uint8_t value){
-    ctx->sr &= ~(NEGATIVE | ZERO);
-    ctx->sr |= ((!value)? ZERO: 0);
-    ctx->sr |= (value & NEGATIVE);
-}
 
-static void fast_set_ZN(c6502* ctx, uint8_t value){
-    // this assumes the necessary flags (Z & N) have been cleared
-    ctx->sr |= ((!value)? ZERO: 0);
-    ctx->sr |= (value & NEGATIVE);
-}
 
 static void push(c6502* ctx, uint8_t value){
     write_mem(ctx->memory, STACK_START + ctx->sp--, value);
