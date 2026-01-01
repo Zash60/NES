@@ -391,24 +391,39 @@ void execute_ppu(PPU* ppu){
 
 static uint16_t render_background(PPU* ppu){
     int x = (int)ppu->dots - 1;
-    uint8_t fine_x = ((uint16_t)ppu->x + x) % 8;
+    uint8_t fine_x = ((uint16_t)ppu->x + x) & 0x7;
 
     if(!(ppu->mask & SHOW_BG_8) && x < 8)
         return 0;
 
-    uint16_t tile_addr = 0x2000 | (ppu->v & 0xFFF);
-    uint16_t attr_addr = 0x23C0 | (ppu->v & 0x0C00) | ((ppu->v >> 4) & 0x38) | ((ppu->v >> 2) & 0x07);
+    // Cache de tile para evitar múltiplas leituras de VRAM por pixel
+    static uint16_t last_v = 0xFFFF;
+    static uint8_t cached_tile_low = 0;
+    static uint8_t cached_tile_high = 0;
+    static uint8_t cached_attr = 0;
 
-    uint16_t pattern_addr = (read_vram(ppu, tile_addr) * 16 + ((ppu->v >> 12) & 0x7)) | ((ppu->ctrl & BG_TABLE) << 8);
+    uint16_t current_v_tile = ppu->v & 0x0FFF; // Ignora fine Y para o endereço do tile
+    uint16_t fine_y = (ppu->v >> 12) & 0x7;
 
-    uint16_t palette_addr = (read_vram(ppu, pattern_addr) >> (7 ^ fine_x)) & 1;
-    palette_addr |= ((read_vram(ppu, pattern_addr + 8) >> (7 ^ fine_x)) & 1) << 1;
+    if (last_v != (ppu->v & 0x7FFF)) {
+        uint16_t tile_addr = 0x2000 | current_v_tile;
+        uint16_t attr_addr = 0x23C0 | (ppu->v & 0x0C00) | ((ppu->v >> 4) & 0x38) | ((ppu->v >> 2) & 0x07);
+        uint8_t tile_index = read_vram(ppu, tile_addr);
+        uint16_t pattern_addr = (tile_index * 16 + fine_y) | ((ppu->ctrl & BG_TABLE) << 8);
+        
+        cached_tile_low = read_vram(ppu, pattern_addr);
+        cached_tile_high = read_vram(ppu, pattern_addr + 8);
+        cached_attr = read_vram(ppu, attr_addr);
+        last_v = ppu->v & 0x7FFF;
+    }
+
+    uint16_t palette_addr = (cached_tile_low >> (7 ^ fine_x)) & 1;
+    palette_addr |= ((cached_tile_high >> (7 ^ fine_x)) & 1) << 1;
 
     if(!palette_addr)
         return 0;
 
-    uint8_t attr = read_vram(ppu, attr_addr);
-    return palette_addr | (((attr >> ((ppu->v >> 4) & 4 | ppu->v & 2)) & 0x3) << 2);
+    return palette_addr | (((cached_attr >> ((ppu->v >> 4) & 4 | ppu->v & 2)) & 0x3) << 2);
 }
 
 static uint16_t render_sprites(PPU* restrict ppu, uint16_t bg_addr, uint8_t* restrict back_priority){

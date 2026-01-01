@@ -22,13 +22,13 @@ uint8_t* get_ptr(Memory* mem, uint16_t address){
 }
 
 void write_mem(Memory* mem, uint16_t address, uint8_t value){
-    uint8_t old = mem->bus;
-    mem->bus = value;
-
     if(address < RAM_END) {
-        mem->RAM[address % RAM_SIZE] = value;
+        mem->RAM[address & 0x7FF] = value;
+        mem->bus = value;
         return;
     }
+    uint8_t old = mem->bus;
+    mem->bus = value;
 
     // resolve mirrored registers
     if(address < IO_REG_MIRRORED_END)
@@ -149,8 +149,7 @@ void write_mem(Memory* mem, uint16_t address, uint8_t value){
 }
 uint8_t read_mem(Memory* mem, uint16_t address){
     if(address < RAM_END) {
-        mem->bus = mem->RAM[address % RAM_SIZE];
-        return mem->bus;
+        return mem->bus = mem->RAM[address & 0x7FF];
     }
     
     // resolve mirrored registers

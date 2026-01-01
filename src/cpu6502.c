@@ -5,8 +5,17 @@
 
 static uint16_t get_address(c6502* ctx);
 static uint16_t read_abs_address(Memory* mem, uint16_t offset);
-static void set_ZN(c6502* ctx, uint8_t value);
-static void fast_set_ZN(c6502* ctx, uint8_t value);
+static inline void set_ZN(c6502* ctx, uint8_t value) {
+    ctx->sr &= ~(ZERO | NEGATIVE);
+    ctx->sr |= (value == 0 ? ZERO : 0);
+    ctx->sr |= (value & 0x80 ? NEGATIVE : 0);
+}
+
+static inline void fast_set_ZN(c6502* ctx, uint8_t value) {
+    ctx->sr &= ~(ZERO | NEGATIVE);
+    ctx->sr |= (value == 0 ? ZERO : 0);
+    ctx->sr |= (value & 0x80 ? NEGATIVE : 0);
+}
 static uint8_t shift_l(c6502* ctx, uint8_t val);
 static uint8_t shift_r(c6502* ctx, uint8_t val);
 static uint8_t rot_l(c6502* ctx, uint8_t val);
@@ -253,9 +262,10 @@ void execute(c6502* ctx){
         }
 
         uint8_t opcode = read_mem(ctx->memory, ctx->pc++);
-        ctx->instruction = &instructionLookup[opcode];
+        const Instruction* instr = &instructionLookup[opcode];
+        ctx->instruction = instr;
         ctx->address = get_address(ctx);
-        if(ctx->instruction->opcode == BRK) {
+        if(instr->opcode == BRK) {
             // set BRK interrupt
             ctx->interrupt |= BRK_I;
             ctx->state |= INTERRUPT_PENDING;

@@ -71,8 +71,14 @@ target_include_directories(nes PRIVATE
 # --- Definições de Compilação ---
 target_compile_definitions(nes PRIVATE 
     ANDROID 
-    DEBUGGING_ENABLED
 )
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+set(CMAKE_C_FLAGS_RELEASE "-O3 -ffast-math -flto -march=native")
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-flto")
 
 # --- Linkagem ---
 target_link_libraries(nes PRIVATE
